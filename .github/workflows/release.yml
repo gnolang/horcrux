@@ -45,7 +45,7 @@ jobs:
         uses: docker/build-push-action@v4
         with:
           context: .
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64
           file: docker/horcrux/Dockerfile
           push: true
           tags: ${{ steps.meta.outputs.tags }}
@@ -68,11 +68,8 @@ jobs:
       - name: Copy Binary
         run: |
           docker create -it --entrypoint sh --name amd --platform linux/amd64 ${{ env.REGISTRY }}/${{ github.repository }}:${{ github.ref_name }}
-          docker create -it --entrypoint sh --name arm --platform linux/arm64 ${{ env.REGISTRY }}/${{ github.repository }}:${{ github.ref_name }}
           docker cp amd:/bin/horcrux ./horcrux_linux-amd64
-          docker cp arm:/bin/horcrux ./horcrux_linux-arm64
           sha256sum ./horcrux_linux-amd64 > ./horcrux_sha256.txt
-          sha256sum ./horcrux_linux-arm64 >> ./horcrux_sha256.txt
 
       - name: Draft Release
         uses: softprops/action-gh-release@v1
@@ -80,5 +77,4 @@ jobs:
           draft: true
           files: |
             horcrux_linux-amd64
-            horcrux_linux-arm64
             horcrux_sha256.txt
