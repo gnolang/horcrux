@@ -14,8 +14,8 @@ import (
 	cometproto "github.com/cometbft/cometbft/proto/tendermint/types"
 	comet "github.com/cometbft/cometbft/types"
 	"github.com/google/uuid"
-	"github.com/stretchr/testify/require"
 	tsed25519 "github.com/strangelove-ventures/horcrux/v3/signer/tsed25519"
+	"github.com/stretchr/testify/require"
 )
 
 // newTestCosignerForNonceSecurity builds a single 2-of-3 LocalCosigner (ID 1)
