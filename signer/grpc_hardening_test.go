@@ -48,3 +48,23 @@ func TestCombineSignaturesRejectsShortPartial(t *testing.T) {
 	_, err := s.CombineSignatures([]PartialSignature{{ID: 1, Signature: []byte("short")}})
 	require.Error(t, err)
 }
+
+// The node-facing gRPC handlers must reject an invalid chain ID before it reaches
+// a file path (single-signer traversal) or a Prometheus metric label (cardinality).
+func TestRemoteSignerPubKeyRejectsBadChainID(t *testing.T) {
+	s := &RemoteSignerGRPCServer{}
+	_, err := s.PubKey(context.Background(), &proto.PubKeyRequest{ChainId: "../../etc/passwd"})
+	require.Error(t, err)
+}
+
+func TestRemoteSignerSignRejectsBadChainID(t *testing.T) {
+	s := &RemoteSignerGRPCServer{}
+	_, err := s.Sign(context.Background(), &proto.SignBlockRequest{ChainID: "a/b", Block: &proto.Block{}})
+	require.Error(t, err)
+}
+
+func TestRemoteSignerSignRejectsNilBlock(t *testing.T) {
+	s := &RemoteSignerGRPCServer{}
+	_, err := s.Sign(context.Background(), &proto.SignBlockRequest{ChainID: "chain-1"})
+	require.Error(t, err)
+}

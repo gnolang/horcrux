@@ -66,6 +66,13 @@ func (s *RemoteSignerGRPCServer) OnStop() {
 func (s *RemoteSignerGRPCServer) PubKey(ctx context.Context, req *proto.PubKeyRequest) (*proto.PubKeyResponse, error) {
 	chainID := req.ChainId
 
+	// Validate before touching a metric label: an unvalidated chain ID is both a
+	// path-traversal input (single-signer mode) and an unbounded metric-label
+	// cardinality DoS.
+	if err := ValidateChainID(chainID); err != nil {
+		return nil, err
+	}
+
 	totalPubKeyRequests.WithLabelValues(chainID).Inc()
 
 	pubKey, err := s.validator.GetPubKey(ctx, chainID)
@@ -87,6 +94,12 @@ func (s *RemoteSignerGRPCServer) Sign(
 	ctx context.Context,
 	req *proto.SignBlockRequest,
 ) (*proto.SignBlockResponse, error) {
+	if err := ValidateChainID(req.ChainID); err != nil {
+		return nil, err
+	}
+	if req.Block == nil {
+		return nil, fmt.Errorf("block is required")
+	}
 	chainID, block := req.ChainID, BlockFromProto(req.Block)
 
 	sig, voteExtSig, timestamp, err := signAndTrack(ctx, s.logger, s.validator, chainID, block)

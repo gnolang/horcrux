@@ -230,6 +230,10 @@ func (rs *ReconnRemoteSigner) handleSignVoteRequest(chainID string, vote *cometp
 		Error: nil,
 	}}
 
+	if err := ValidateChainID(chainID); err != nil {
+		msgSum.SignedVoteResponse.Error = getRemoteSignerError(err)
+		return cometprotoprivval.Message{Sum: msgSum}
+	}
 	if vote == nil {
 		msgSum.SignedVoteResponse.Error = getRemoteSignerError(fmt.Errorf("vote is required"))
 		return cometprotoprivval.Message{Sum: msgSum}
@@ -268,6 +272,10 @@ func (rs *ReconnRemoteSigner) handleSignProposalRequest(
 		},
 	}
 
+	if err := ValidateChainID(chainID); err != nil {
+		msgSum.SignedProposalResponse.Error = getRemoteSignerError(err)
+		return cometprotoprivval.Message{Sum: msgSum}
+	}
 	if proposal == nil {
 		msgSum.SignedProposalResponse.Error = getRemoteSignerError(fmt.Errorf("proposal is required"))
 		return cometprotoprivval.Message{Sum: msgSum}
@@ -291,11 +299,20 @@ func (rs *ReconnRemoteSigner) handleSignProposalRequest(
 }
 
 func (rs *ReconnRemoteSigner) handlePubKeyRequest(chainID string) cometprotoprivval.Message {
-	totalPubKeyRequests.WithLabelValues(chainID).Inc()
 	msgSum := &cometprotoprivval.Message_PubKeyResponse{PubKeyResponse: &cometprotoprivval.PubKeyResponse{
 		PubKey: cometprotocrypto.PublicKey{},
 		Error:  nil,
 	}}
+
+	// Validate before touching a metric label: an unvalidated chain ID is both a
+	// path-traversal input (single-signer mode) and an unbounded metric-label
+	// cardinality DoS.
+	if err := ValidateChainID(chainID); err != nil {
+		msgSum.PubKeyResponse.Error = getRemoteSignerError(err)
+		return cometprotoprivval.Message{Sum: msgSum}
+	}
+
+	totalPubKeyRequests.WithLabelValues(chainID).Inc()
 
 	pubKey, err := rs.privVal.GetPubKey(context.TODO(), chainID)
 	if err != nil {

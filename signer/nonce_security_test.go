@@ -103,6 +103,19 @@ func TestSetNoncesAndSignRejectsEqualUUIDs(t *testing.T) {
 	require.Error(t, err, "equal vote and vote-extension nonce UUIDs must be rejected")
 }
 
+// SetNoncesAndSign must reject a nil Nonces field rather than nil-deref panic.
+func TestSetNoncesAndSignRejectsNilNonces(t *testing.T) {
+	cosigner := newTestCosignerForNonceSecurity(t)
+	signBytes, _ := craftedPrecommitWithExtension(t)
+
+	_, err := cosigner.SetNoncesAndSign(context.Background(), CosignerSetNoncesAndSignRequest{
+		ChainID:   testChainID,
+		Nonces:    nil,
+		SignBytes: signBytes,
+	})
+	require.Error(t, err)
+}
+
 // combinedNonces must not sign with fewer than threshold nonce contributions;
 // otherwise a single self-only nonce is enough to produce a partial signature.
 func TestSignRejectsBelowThresholdNonces(t *testing.T) {

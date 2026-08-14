@@ -35,3 +35,29 @@ func recoveryUnaryInterceptor(logger cometlog.Logger) grpc.UnaryServerIntercepto
 		return handler(ctx, req)
 	}
 }
+
+// recoveryStreamInterceptor is the streaming counterpart of
+// recoveryUnaryInterceptor. The cosigner port also serves streaming RPCs (the
+// raft transport pipeline and gRPC health watch), whose handler panics the unary
+// interceptor does not cover.
+func recoveryStreamInterceptor(logger cometlog.Logger) grpc.StreamServerInterceptor {
+	return func(
+		srv any,
+		ss grpc.ServerStream,
+		info *grpc.StreamServerInfo,
+		handler grpc.StreamHandler,
+	) (err error) {
+		defer func() {
+			if r := recover(); r != nil {
+				logger.Error(
+					"recovered from panic in gRPC stream handler",
+					"method", info.FullMethod,
+					"panic", r,
+					"stack", string(debug.Stack()),
+				)
+				err = status.Errorf(codes.Internal, "internal error")
+			}
+		}()
+		return handler(srv, ss)
+	}
+}

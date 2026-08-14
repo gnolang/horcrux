@@ -101,7 +101,10 @@ func (s *RaftStore) init() error {
 	if err != nil {
 		return err
 	}
-	grpcServer := grpc.NewServer(grpc.UnaryInterceptor(recoveryUnaryInterceptor(s.logger)))
+	grpcServer := grpc.NewServer(
+		grpc.UnaryInterceptor(recoveryUnaryInterceptor(s.logger)),
+		grpc.StreamInterceptor(recoveryStreamInterceptor(s.logger)),
+	)
 	proto.RegisterCosignerServer(grpcServer, NewCosignerGRPCServer(s.cosigner, s.thresholdValidator, s))
 	transportManager.Register(grpcServer)
 	leaderhealth.Setup(s.raft, grpcServer, []string{"Leader"})

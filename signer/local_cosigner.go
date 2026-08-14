@@ -306,7 +306,7 @@ func (cosigner *LocalCosigner) sign(req CosignerSignRequest) (CosignerSignRespon
 		Step:                   hrst.Step,
 		Signature:              sig,
 		SignBytes:              req.SignBytes,
-		VoteExtensionSignature: res.VoteExtensionSignature,
+		VoteExtensionSignature: voteExtSig,
 	}, &cosigner.pendingDiskWG)
 	if err != nil {
 		var sameHRSError *SameHRSError
@@ -541,6 +541,13 @@ func (cosigner *LocalCosigner) SetNoncesAndSign(
 
 	if err := cosigner.LoadSignStateIfNecessary(chainID); err != nil {
 		return nil, err
+	}
+
+	if req.Nonces == nil {
+		return nil, fmt.Errorf("nonces are required")
+	}
+	if len(req.VoteExtensionSignBytes) > 0 && req.VoteExtensionNonces == nil {
+		return nil, fmt.Errorf("vote extension nonces are required when signing a vote extension")
 	}
 
 	var eg errgroup.Group

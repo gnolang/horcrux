@@ -96,6 +96,12 @@ func (cosigner *RemoteCosigner) GetNonces(
 	}
 	out := make(CosignerUUIDNoncesMultiple, len(res.Nonces))
 	for i, nonces := range res.Nonces {
+		// A peer's response is untrusted (and the transport is unauthenticated):
+		// converting a slice shorter than 16 bytes to a UUID array panics, and
+		// this runs in goroutines with no recovery in scope.
+		if len(nonces.Uuid) != uuidLen {
+			return nil, fmt.Errorf("nonce uuid from cosigner %d must be %d bytes, got %d", cosigner.GetID(), uuidLen, len(nonces.Uuid))
+		}
 		out[i] = &CosignerUUIDNonces{
 			UUID:   uuid.UUID(nonces.Uuid),
 			Nonces: CosignerNoncesFromProto(nonces.Nonces),
@@ -107,7 +113,8 @@ func (cosigner *RemoteCosigner) GetNonces(
 // Implements the cosigner interface
 func (cosigner *RemoteCosigner) SetNoncesAndSign(
 	ctx context.Context,
-	req CosignerSetNoncesAndSignRequest) (*CosignerSignResponse, error) {
+	req CosignerSetNoncesAndSignRequest,
+) (*CosignerSignResponse, error) {
 	cosignerReq := &proto.SetNoncesAndSignRequest{
 		Uuid:      req.Nonces.UUID[:],
 		ChainID:   req.ChainID,

@@ -69,6 +69,10 @@ func (pv *SingleSignerValidator) Sign(
 }
 
 func (pv *SingleSignerValidator) loadChainStateIfNecessary(chainID string) (*SingleSignerChainState, error) {
+	if err := ValidateChainID(chainID); err != nil {
+		return nil, err
+	}
+
 	cachedChainState, ok := pv.chainState.Load(chainID)
 	if ok {
 		return cachedChainState.(*SingleSignerChainState), nil
