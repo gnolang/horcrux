@@ -113,8 +113,19 @@ func (c *Config) ValidateThresholdModeConfig() error {
 	if c.ThresholdModeConfig.ClusterTLSEnabled() {
 		// Every cosigner must carry a valid tlsPubKey so the allowlist is
 		// complete; a partial allowlist would silently leave a peer unauthenticated.
-		if _, err := c.ThresholdModeConfig.ClusterPeerPubKeys(); err != nil {
+		keys, err := c.ThresholdModeConfig.ClusterPeerPubKeys()
+		if err != nil {
 			return fmt.Errorf("clusterKeyFile is set, so every cosigner needs a valid tlsPubKey: %w", err)
+		}
+		// Distinct cosigners must have distinct identities; a shared tlsPubKey is an
+		// operator error the pinning allowlist cannot otherwise detect.
+		seen := make(map[string]struct{}, len(keys))
+		for i, k := range keys {
+			h := string(k)
+			if _, dup := seen[h]; dup {
+				return fmt.Errorf("cosigner shard %d reuses another cosigner's tlsPubKey", c.ThresholdModeConfig.Cosigners[i].ShardID)
+			}
+			seen[h] = struct{}{}
 		}
 	}
 

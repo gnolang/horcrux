@@ -154,6 +154,41 @@ func TestClusterPeerPubKeys(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestValidateClusterTLSConfig(t *testing.T) {
+	k1 := hex.EncodeToString(cometcryptoed25519.GenPrivKey().PubKey().Bytes())
+	k2 := hex.EncodeToString(cometcryptoed25519.GenPrivKey().PubKey().Bytes())
+
+	mkConfig := func(tls1, tls2 string) signer.Config {
+		return signer.Config{
+			ThresholdModeConfig: &signer.ThresholdModeConfig{
+				Threshold:      2,
+				ClusterKeyFile: "cluster_key.json",
+				GRPCTimeout:    "500ms",
+				RaftTimeout:    "500ms",
+				Cosigners: signer.CosignersConfig{
+					{ShardID: 1, P2PAddr: "tcp://10.0.0.1:2222", TLSPubKey: tls1},
+					{ShardID: 2, P2PAddr: "tcp://10.0.0.2:2222", TLSPubKey: tls2},
+				},
+			},
+		}
+	}
+
+	t.Run("distinct tlsPubKeys validate", func(t *testing.T) {
+		c := mkConfig(k1, k2)
+		require.NoError(t, c.ValidateThresholdModeConfig())
+	})
+
+	t.Run("missing tlsPubKey is rejected", func(t *testing.T) {
+		c := mkConfig(k1, "")
+		require.Error(t, c.ValidateThresholdModeConfig())
+	})
+
+	t.Run("duplicate tlsPubKey is rejected", func(t *testing.T) {
+		c := mkConfig(k1, k1)
+		require.Error(t, c.ValidateThresholdModeConfig())
+	})
+}
+
 func TestValidateSingleSignerConfig(t *testing.T) {
 	type testCase struct {
 		name      string

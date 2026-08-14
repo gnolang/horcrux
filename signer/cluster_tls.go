@@ -63,9 +63,14 @@ func clusterTLSConfig(identity cometcryptoed25519.PrivKey, allowed []cometcrypto
 		// is disabled and fully replaced by VerifyPeerCertificate (which TLS still
 		// invokes when InsecureSkipVerify is set). RequireAnyClientCert makes the
 		// server demand a client certificate so the same pinning runs both ways.
-		ClientAuth:            tls.RequireAnyClientCert,
-		InsecureSkipVerify:    true, //nolint:gosec // peer identity is pinned in VerifyPeerCertificate
-		VerifyPeerCertificate: verify,
+		ClientAuth:         tls.RequireAnyClientCert,
+		InsecureSkipVerify: true, //nolint:gosec // peer identity is pinned in VerifyPeerCertificate
+		// Disable session resumption so every connection is a full handshake that
+		// re-runs VerifyPeerCertificate against the current allowlist. Otherwise a
+		// resumed session would skip peer verification, and a cosigner removed from
+		// the allowlist could keep connecting until tickets rotated.
+		SessionTicketsDisabled: true,
+		VerifyPeerCertificate:  verify,
 	}, nil
 }
 
@@ -101,7 +106,7 @@ func selfSignedCert(identity cometcryptoed25519.PrivKey) (tls.Certificate, error
 	priv := ed25519.PrivateKey(identity)
 	pub, ok := priv.Public().(ed25519.PublicKey)
 	if !ok {
-		return tls.Certificate{}, fmt.Errorf("identity key is not ed25519")
+		return tls.Certificate{}, errors.New("identity key is not ed25519")
 	}
 
 	template := &x509.Certificate{
