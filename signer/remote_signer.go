@@ -168,8 +168,15 @@ func (rs *ReconnRemoteSigner) loop(ctx context.Context) {
 			continue
 		}
 
-		// handleRequest handles request errors. We always send back a response
-		res := rs.handleRequest(req)
+		// handleRequest handles request errors. We always send back a response.
+		// A malformed request must never panic the process (validator downtime);
+		// recover and drop the connection, letting the node reconnect.
+		res, panicked := rs.handleRequestSafely(req)
+		if panicked {
+			rs.closeConn(conn)
+			conn = nil
+			continue
+		}
 
 		err = WriteMsg(conn, res)
 		if err != nil {
@@ -182,6 +189,23 @@ func (rs *ReconnRemoteSigner) loop(ctx context.Context) {
 			conn = nil
 		}
 	}
+}
+
+// handleRequestSafely wraps handleRequest so a panic on malformed input becomes a
+// dropped connection rather than a process crash. It returns panicked=true when a
+// panic was recovered.
+func (rs *ReconnRemoteSigner) handleRequestSafely(req cometprotoprivval.Message) (res cometprotoprivval.Message, panicked bool) {
+	defer func() {
+		if r := recover(); r != nil {
+			rs.Logger.Error(
+				"Recovered from panic handling privval request",
+				"address", rs.address,
+				"panic", r,
+			)
+			panicked = true
+		}
+	}()
+	return rs.handleRequest(req), false
 }
 
 func (rs *ReconnRemoteSigner) handleRequest(req cometprotoprivval.Message) cometprotoprivval.Message {
@@ -205,6 +229,15 @@ func (rs *ReconnRemoteSigner) handleSignVoteRequest(chainID string, vote *cometp
 		Vote:  cometproto.Vote{},
 		Error: nil,
 	}}
+
+	if vote == nil {
+		msgSum.SignedVoteResponse.Error = getRemoteSignerError(fmt.Errorf("vote is required"))
+		return cometprotoprivval.Message{Sum: msgSum}
+	}
+	if vote.Type != cometproto.PrevoteType && vote.Type != cometproto.PrecommitType {
+		msgSum.SignedVoteResponse.Error = getRemoteSignerError(fmt.Errorf("unexpected vote type: %v", vote.Type))
+		return cometprotoprivval.Message{Sum: msgSum}
+	}
 
 	sig, voteExtSig, timestamp, err := signAndTrack(
 		context.TODO(),
@@ -233,6 +266,11 @@ func (rs *ReconnRemoteSigner) handleSignProposalRequest(
 			Proposal: cometproto.Proposal{},
 			Error:    nil,
 		},
+	}
+
+	if proposal == nil {
+		msgSum.SignedProposalResponse.Error = getRemoteSignerError(fmt.Errorf("proposal is required"))
+		return cometprotoprivval.Message{Sum: msgSum}
 	}
 
 	signature, _, timestamp, err := signAndTrack(

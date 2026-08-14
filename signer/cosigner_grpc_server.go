@@ -9,6 +9,10 @@ import (
 	"github.com/strangelove-ventures/horcrux/v3/signer/proto"
 )
 
+// uuidLen is the wire length in bytes of a UUID; converting a slice of any other
+// length to the underlying [16]byte array panics.
+const uuidLen = 16
+
 var _ proto.CosignerServer = &CosignerGRPCServer{}
 
 type CosignerGRPCServer struct {
@@ -34,6 +38,9 @@ func (rpc *CosignerGRPCServer) SignBlock(
 	ctx context.Context,
 	req *proto.SignBlockRequest,
 ) (*proto.SignBlockResponse, error) {
+	if req.Block == nil {
+		return nil, fmt.Errorf("block is required")
+	}
 	sig, voteExtSig, _, err := rpc.thresholdValidator.Sign(ctx, req.ChainID, BlockFromProto(req.Block))
 	if err != nil {
 		return nil, err
@@ -48,6 +55,13 @@ func (rpc *CosignerGRPCServer) SetNoncesAndSign(
 	ctx context.Context,
 	req *proto.SetNoncesAndSignRequest,
 ) (*proto.SetNoncesAndSignResponse, error) {
+	if req.Hrst == nil {
+		return nil, fmt.Errorf("hrst is required")
+	}
+	if len(req.Uuid) != uuidLen {
+		return nil, fmt.Errorf("uuid must be %d bytes, got %d", uuidLen, len(req.Uuid))
+	}
+
 	cosignerReq := CosignerSetNoncesAndSignRequest{
 		ChainID: req.ChainID,
 
@@ -60,7 +74,7 @@ func (rpc *CosignerGRPCServer) SetNoncesAndSign(
 		SignBytes: req.SignBytes,
 	}
 
-	if len(req.VoteExtSignBytes) > 0 && len(req.VoteExtUuid) == 16 {
+	if len(req.VoteExtSignBytes) > 0 && len(req.VoteExtUuid) == uuidLen {
 		cosignerReq.VoteExtensionNonces = &CosignerUUIDNonces{
 			UUID:   uuid.UUID(req.VoteExtUuid),
 			Nonces: CosignerNoncesFromProto(req.VoteExtNonces),
@@ -102,6 +116,9 @@ func (rpc *CosignerGRPCServer) GetNonces(
 ) (*proto.GetNoncesResponse, error) {
 	uuids := make([]uuid.UUID, len(req.Uuids))
 	for i, uuidBytes := range req.Uuids {
+		if len(uuidBytes) != uuidLen {
+			return nil, fmt.Errorf("uuid must be %d bytes, got %d", uuidLen, len(uuidBytes))
+		}
 		uuids[i] = uuid.UUID(uuidBytes)
 	}
 	res, err := rpc.cosigner.GetNonces(

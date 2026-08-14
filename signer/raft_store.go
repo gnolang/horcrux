@@ -21,7 +21,6 @@ import (
 
 	"github.com/Jille/raft-grpc-leader-rpc/leaderhealth"
 	raftgrpctransport "github.com/Jille/raft-grpc-transport"
-	"github.com/Jille/raftadmin"
 	"github.com/cometbft/cometbft/libs/log"
 	"github.com/cometbft/cometbft/libs/service"
 	"github.com/hashicorp/raft"
@@ -29,7 +28,6 @@ import (
 	"github.com/strangelove-ventures/horcrux/v3/signer/proto"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
-	"google.golang.org/grpc/reflection"
 )
 
 var _ Leader = (*RaftStore)(nil)
@@ -67,7 +65,8 @@ type RaftStore struct {
 // New returns a new Store.
 func NewRaftStore(
 	nodeID string, directory string, bindAddress string, timeout time.Duration,
-	logger log.Logger, cosigner *LocalCosigner, cosigners []Cosigner) *RaftStore {
+	logger log.Logger, cosigner *LocalCosigner, cosigners []Cosigner,
+) *RaftStore {
 	cosignerRaftStore := &RaftStore{
 		NodeID:      nodeID,
 		RaftDir:     directory,
@@ -102,12 +101,10 @@ func (s *RaftStore) init() error {
 	if err != nil {
 		return err
 	}
-	grpcServer := grpc.NewServer()
+	grpcServer := grpc.NewServer(grpc.UnaryInterceptor(recoveryUnaryInterceptor(s.logger)))
 	proto.RegisterCosignerServer(grpcServer, NewCosignerGRPCServer(s.cosigner, s.thresholdValidator, s))
 	transportManager.Register(grpcServer)
 	leaderhealth.Setup(s.raft, grpcServer, []string{"Leader"})
-	raftadmin.Register(grpcServer, s.raft)
-	reflection.Register(grpcServer)
 	return grpcServer.Serve(sock)
 }
 
@@ -399,7 +396,6 @@ func (f *fsmSnapshot) Persist(sink raft.SnapshotSink) error {
 		// Close the sink.
 		return sink.Close()
 	}()
-
 	if err != nil {
 		f.logger.Error("Snapshot persist error", err.Error())
 		sinkErr := sink.Cancel()

@@ -11,7 +11,6 @@ import (
 
 	"github.com/strangelove-ventures/horcrux/v3/signer/proto"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/reflection"
 )
 
 var _ proto.RemoteSignerServer = &RemoteSignerGRPCServer{}
@@ -48,9 +47,8 @@ func (s *RemoteSignerGRPCServer) OnStart() error {
 	if err != nil {
 		return err
 	}
-	s.server = grpc.NewServer()
+	s.server = grpc.NewServer(grpc.UnaryInterceptor(recoveryUnaryInterceptor(s.logger)))
 	proto.RegisterRemoteSignerServer(s.server, s)
-	reflection.Register(s.server)
 	go s.serve(sock)
 	return nil
 }

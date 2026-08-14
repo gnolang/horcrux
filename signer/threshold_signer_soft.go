@@ -111,6 +111,12 @@ func (s *ThresholdSignerSoft) CombineSignatures(signatures []PartialSignature) (
 	var ephPub []byte
 
 	for i, sig := range signatures {
+		// A partial signature is a 32-byte nonce public key followed by the share
+		// signature. A peer returning anything shorter would panic the slicing
+		// below, so reject it rather than crash mid-sign.
+		if len(sig.Signature) <= 32 {
+			return nil, fmt.Errorf("partial signature from cosigner %d too short: %d bytes", sig.ID, len(sig.Signature))
+		}
 		sigIds[i] = sig.ID
 		if i == 0 {
 			ephPub = sig.Signature[:32]
