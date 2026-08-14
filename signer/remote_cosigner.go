@@ -113,7 +113,10 @@ func (cosigner *RemoteCosigner) GetNonces(
 		// converting a slice shorter than 16 bytes to a UUID array panics, and
 		// this runs in goroutines with no recovery in scope.
 		if len(nonces.Uuid) != uuidLen {
-			return nil, fmt.Errorf("nonce uuid from cosigner %d must be %d bytes, got %d", cosigner.GetID(), uuidLen, len(nonces.Uuid))
+			return nil, fmt.Errorf(
+				"nonce uuid from cosigner %d must be %d bytes, got %d",
+				cosigner.GetID(), uuidLen, len(nonces.Uuid),
+			)
 		}
 		out[i] = &CosignerUUIDNonces{
 			UUID:   uuid.UUID(nonces.Uuid),

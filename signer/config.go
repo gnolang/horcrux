@@ -123,7 +123,10 @@ func (c *Config) ValidateThresholdModeConfig() error {
 		for i, k := range keys {
 			h := string(k)
 			if _, dup := seen[h]; dup {
-				return fmt.Errorf("cosigner shard %d reuses another cosigner's tlsPubKey", c.ThresholdModeConfig.Cosigners[i].ShardID)
+				return fmt.Errorf(
+					"cosigner shard %d reuses another cosigner's tlsPubKey",
+					c.ThresholdModeConfig.Cosigners[i].ShardID,
+				)
 			}
 			seen[h] = struct{}{}
 		}

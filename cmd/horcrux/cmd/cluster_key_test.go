@@ -16,7 +16,7 @@ func TestCreateClusterKey(t *testing.T) {
 
 		out := new(bytes.Buffer)
 		cmd := rootCmd()
-		cmd.SetOutput(out)
+		cmd.SetOut(out)
 		cmd.SetArgs([]string{"create-cluster-key", "--home", tmp})
 		require.NoError(t, cmd.Execute())
 
@@ -30,12 +30,12 @@ func TestCreateClusterKey(t *testing.T) {
 		tmp := connKeyTestHome(t, "signMode: threshold\n")
 
 		first := rootCmd()
-		first.SetOutput(io.Discard)
+		first.SetOut(io.Discard)
 		first.SetArgs([]string{"create-cluster-key", "--home", tmp})
 		require.NoError(t, first.Execute())
 
 		second := rootCmd()
-		second.SetOutput(io.Discard)
+		second.SetOut(io.Discard)
 		second.SetArgs([]string{"create-cluster-key", "--home", tmp})
 		require.Error(t, second.Execute())
 	})

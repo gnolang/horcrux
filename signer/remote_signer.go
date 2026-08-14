@@ -194,7 +194,9 @@ func (rs *ReconnRemoteSigner) loop(ctx context.Context) {
 // handleRequestSafely wraps handleRequest so a panic on malformed input becomes a
 // dropped connection rather than a process crash. It returns panicked=true when a
 // panic was recovered.
-func (rs *ReconnRemoteSigner) handleRequestSafely(req cometprotoprivval.Message) (res cometprotoprivval.Message, panicked bool) {
+func (rs *ReconnRemoteSigner) handleRequestSafely(
+	req cometprotoprivval.Message,
+) (res cometprotoprivval.Message, panicked bool) {
 	defer func() {
 		if r := recover(); r != nil {
 			rs.Logger.Error(

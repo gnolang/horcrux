@@ -86,7 +86,9 @@ func precommitBytes(height int64, tag string) []byte {
 
 // buildSignReq prepares nonces for one block at one HRS and returns a ready
 // SetNoncesAndSign request for cosigner 1, with cosigner 2's contribution.
-func buildSignReq(t *testing.T, ctx context.Context, c1, c2 *LocalCosigner, height int64, tag string) CosignerSetNoncesAndSignRequest {
+func buildSignReq(
+	ctx context.Context, t *testing.T, c1, c2 *LocalCosigner, height int64, tag string,
+) CosignerSetNoncesAndSignRequest {
 	t.Helper()
 	u := uuid.New()
 
@@ -122,8 +124,8 @@ func TestCosignerConcurrentDifferentBlocksSameHRS(t *testing.T) {
 	for i := 0; i < rounds; i++ {
 		height := int64(i + 1)
 
-		reqA := buildSignReq(t, ctx, c1, c2, height, "blockA")
-		reqB := buildSignReq(t, ctx, c1, c2, height, "blockB")
+		reqA := buildSignReq(ctx, t, c1, c2, height, "blockA")
+		reqB := buildSignReq(ctx, t, c1, c2, height, "blockB")
 
 		var wg sync.WaitGroup
 		wg.Add(2)

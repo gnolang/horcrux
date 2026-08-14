@@ -70,7 +70,7 @@ func TestCreateConnKey(t *testing.T) {
 
 		out := new(bytes.Buffer)
 		cmd := rootCmd()
-		cmd.SetOutput(out)
+		cmd.SetOut(out)
 		cmd.SetArgs([]string{"create-conn-key", "--home", tmp})
 		require.NoError(t, cmd.Execute())
 
@@ -90,7 +90,7 @@ func TestCreateConnKey(t *testing.T) {
 		tmp := connKeyTestHome(t, "signMode: threshold\n")
 
 		first := rootCmd()
-		first.SetOutput(io.Discard)
+		first.SetOut(io.Discard)
 		first.SetArgs([]string{"create-conn-key", "--home", tmp})
 		require.NoError(t, first.Execute())
 
@@ -99,7 +99,7 @@ func TestCreateConnKey(t *testing.T) {
 		require.NoError(t, err)
 
 		second := rootCmd()
-		second.SetOutput(io.Discard)
+		second.SetOut(io.Discard)
 		second.SetArgs([]string{"create-conn-key", "--home", tmp})
 		require.Error(t, second.Execute())
 
@@ -113,7 +113,7 @@ func TestCreateConnKey(t *testing.T) {
 		tmp := connKeyTestHome(t, "keyDir: "+keyDir+"\n")
 
 		cmd := rootCmd()
-		cmd.SetOutput(io.Discard)
+		cmd.SetOut(io.Discard)
 		cmd.SetArgs([]string{"create-conn-key", "--home", tmp})
 		require.NoError(t, cmd.Execute())
 
@@ -125,7 +125,7 @@ func TestCreateConnKey(t *testing.T) {
 		tmp := connKeyTestHome(t, "connKeyFile: custom_conn.json\n")
 
 		cmd := rootCmd()
-		cmd.SetOutput(io.Discard)
+		cmd.SetOut(io.Discard)
 		cmd.SetArgs([]string{"create-conn-key", "--home", tmp})
 		require.NoError(t, cmd.Execute())
 
