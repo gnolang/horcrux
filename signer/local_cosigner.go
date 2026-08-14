@@ -85,13 +85,19 @@ func (cosigner *LocalCosigner) pruneNonces() {
 }
 
 func (cosigner *LocalCosigner) combinedNonces(myID int, threshold uint8, uuid uuid.UUID) ([]Nonce, error) {
-	cosigner.noncesMu.RLock()
-	defer cosigner.noncesMu.RUnlock()
+	cosigner.noncesMu.Lock()
+	defer cosigner.noncesMu.Unlock()
 
 	nonces, ok := cosigner.nonces[uuid]
 	if !ok {
 		return nil, errors.New("no metadata at HRS")
 	}
+
+	// Consume the nonce as it is read, under the write lock. A nonce must be used
+	// for at most one signature: reusing it across two messages lets an observer
+	// recover the private key shard. Deleting here (rather than after signing)
+	// closes the window in which two concurrent requests read the same nonce.
+	delete(cosigner.nonces, uuid)
 
 	combinedNonces := make([]Nonce, 0, threshold)
 
@@ -105,6 +111,13 @@ func (cosigner *LocalCosigner) combinedNonces(myID int, threshold uint8, uuid uu
 			Share:  c.Shares[myID-1],
 			PubKey: c.PubKey,
 		})
+	}
+
+	// A partial signature must draw on at least threshold nonce contributions.
+	// Signing with fewer (e.g. only this cosigner's own) both breaks the protocol
+	// assumption and enables the single-RPC key-extraction attack.
+	if len(combinedNonces) < int(threshold) {
+		return nil, fmt.Errorf("insufficient nonces for signing: have %d, need %d", len(combinedNonces), threshold)
 	}
 
 	return combinedNonces, nil
@@ -219,6 +232,13 @@ func (cosigner *LocalCosigner) sign(req CosignerSignRequest) (CosignerSignRespon
 		return res, err
 	}
 
+	// The vote and the vote extension are distinct messages and must be signed
+	// under distinct nonces. Sharing one UUID would sign both under the same
+	// nonce, from which the private key shard can be recovered.
+	if hasVoteExtensions && req.UUID == req.VoteExtUUID {
+		return res, errors.New("vote and vote extension nonce UUIDs must differ")
+	}
+
 	// This function has multiple exit points.  Only start time can be guaranteed
 	metricsTimeKeeper.SetPreviousLocalSignStart(time.Now())
 
@@ -288,7 +308,6 @@ func (cosigner *LocalCosigner) sign(req CosignerSignRequest) (CosignerSignRespon
 		SignBytes:              req.SignBytes,
 		VoteExtensionSignature: res.VoteExtensionSignature,
 	}, &cosigner.pendingDiskWG)
-
 	if err != nil {
 		if _, isSameHRSError := err.(*SameHRSError); !isSameHRSError {
 			return res, err
@@ -508,7 +527,8 @@ func (cosigner *LocalCosigner) setNonce(uuid uuid.UUID, nonce CosignerNonce) err
 
 func (cosigner *LocalCosigner) SetNoncesAndSign(
 	_ context.Context,
-	req CosignerSetNoncesAndSignRequest) (*CosignerSignResponse, error) {
+	req CosignerSetNoncesAndSignRequest,
+) (*CosignerSignResponse, error) {
 	chainID := req.ChainID
 
 	if err := cosigner.LoadSignStateIfNecessary(chainID); err != nil {
