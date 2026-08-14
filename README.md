@@ -2,6 +2,15 @@
 
 Horcrux is a [multi-party-computation (MPC)](https://en.wikipedia.org/wiki/Secure_multi-party_computation) signing service for CometBFT (Formerly known as Tendermint) nodes
 
+> **Hardened fork.** This is a security-hardened fork of
+> [strangelove-ventures/horcrux](https://github.com/strangelove-ventures/horcrux)
+> (based on `v3.3.2`). It adds optional connection authentication, opt-in cosigner
+> mutual TLS, dependency/toolchain updates, and fixes for issues found in two
+> security audits. All additions are opt-in and backward-compatible. See
+> [`docs/FORK.md`](docs/FORK.md) for the full list of changes and
+> [`docs/authentication.md`](docs/authentication.md) for the authentication and
+> mutual-TLS setup.
+
 ## Why use Horcrux?
 
 Take your validator infrastructure to the next level of security and availability
