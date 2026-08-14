@@ -57,6 +57,10 @@ type ChainState struct {
 	lastSignState *SignState
 	// signer generates nonces, combines nonces, signs, and verifies signatures.
 	signer ThresholdSigner
+	// signMu serializes the check-sign-save sequence for this chain. Without it,
+	// two concurrent requests at the same HRS can both pass the pre-check before
+	// either advances the sign state and produce signatures over different blocks.
+	signMu sync.Mutex
 }
 
 // StartNoncePruner periodically prunes nonces that have expired.
@@ -227,6 +231,11 @@ func (cosigner *LocalCosigner) sign(req CosignerSignRequest) (CosignerSignRespon
 		return res, err
 	}
 
+	// Serialize the whole check-sign-save sequence for this chain so two
+	// concurrent requests at the same HRS cannot both pass the pre-check.
+	ccs.signMu.Lock()
+	defer ccs.signMu.Unlock()
+
 	hrst, hasVoteExtensions, err := verifySignPayload(chainID, req.SignBytes, req.VoteExtensionSignBytes)
 	if err != nil {
 		return res, err
@@ -309,8 +318,16 @@ func (cosigner *LocalCosigner) sign(req CosignerSignRequest) (CosignerSignRespon
 		VoteExtensionSignature: res.VoteExtensionSignature,
 	}, &cosigner.pendingDiskWG)
 	if err != nil {
-		if _, isSameHRSError := err.(*SameHRSError); !isSameHRSError {
+		var sameHRSError *SameHRSError
+		if !errors.As(err, &sameHRSError) {
 			return res, err
+		}
+		// A signature for this HRS already exists. Returning ours is only safe if
+		// it is for the same block (or differs only by timestamp); if the stored
+		// block differs materially, returning our signature would be a double
+		// sign, so refuse and discard it.
+		if _, checkErr := ccs.lastSignState.existingSignatureOrErrorIfRegression(hrst, req.SignBytes); checkErr != nil {
+			return res, checkErr
 		}
 	}
 
