@@ -1,0 +1,11 @@
+.vscode
+.idea
+build
+data
+private_share_*
+*_shard.json
+rsa_keys.json
+conn_key.json
+priv_validator_key.json
+dist/
+go.work.sum

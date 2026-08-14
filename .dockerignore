@@ -1,0 +1,9 @@
+testing/
+test/
+scripts/
+docs/
+data/
+build/
+docker/
+go.work
+go.work.sum

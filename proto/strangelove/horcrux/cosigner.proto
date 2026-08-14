@@ -1,0 +1,98 @@
+syntax = "proto3";
+package strangelove.horcrux;
+
+option go_package = "github.com/strangelove-ventures/horcrux/v3/signer/proto";
+
+service Cosigner {
+	rpc SignBlock (SignBlockRequest) returns (SignBlockResponse) {}
+	rpc SetNoncesAndSign (SetNoncesAndSignRequest) returns (SetNoncesAndSignResponse) {}
+	rpc GetNonces (GetNoncesRequest) returns (GetNoncesResponse) {}
+	rpc TransferLeadership (TransferLeadershipRequest) returns (TransferLeadershipResponse) {}
+	rpc GetLeader (GetLeaderRequest) returns (GetLeaderResponse) {}
+	rpc Ping(PingRequest) returns (PingResponse) {}
+}
+
+message Block {
+	int64 height = 1;
+	int64 round = 2;
+	int32 step = 3;
+	bytes signBytes = 4;
+	bytes voteExtSignBytes = 5;
+	int64 timestamp = 6;
+}
+
+message SignBlockRequest {
+	string chainID = 1;
+	Block block = 2;
+}
+
+message SignBlockResponse {
+	bytes signature = 1;
+	bytes vote_ext_signature = 2;
+	int64 timestamp = 3;
+}
+
+message Nonce {
+	int32 sourceID = 1;
+	int32 destinationID = 2;
+	bytes pubKey = 3;
+	bytes share = 4;
+	bytes signature = 5;
+}
+
+message UUIDNonce {
+	bytes uuid = 1;
+	repeated Nonce nonces = 2;
+}
+
+message HRST {
+	int64 height = 1;
+	int64 round = 2;
+	int32 step = 3;
+	int64 timestamp = 4;
+}
+
+message SetNoncesAndSignRequest {
+	bytes uuid = 1;
+	repeated Nonce nonces = 2;
+	HRST hrst = 3;
+	bytes signBytes = 4;
+	bytes voteExtUuid = 5;
+	repeated Nonce voteExtNonces = 6;
+	bytes voteExtSignBytes = 7;
+	string chainID = 8;
+}
+
+message SetNoncesAndSignResponse {
+	int64 timestamp = 1;
+	bytes noncePublic = 2;
+	bytes signature = 3;
+	bytes voteExtNoncePublic = 4;
+	bytes voteExtSignature = 5;
+}
+
+message GetNoncesRequest {
+	repeated bytes uuids = 1;
+}
+
+message GetNoncesResponse {
+	repeated UUIDNonce nonces = 1;
+}
+
+message TransferLeadershipRequest {
+ 	string leaderID = 1;
+}
+
+message TransferLeadershipResponse {
+	string leaderID = 1;
+	string leaderAddress = 2;
+}
+
+message GetLeaderRequest {}
+
+message GetLeaderResponse {
+	int32 leader = 1;
+}
+
+message PingRequest {}
+message PingResponse {}

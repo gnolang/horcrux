@@ -1,0 +1,396 @@
+package signer
+
+import (
+	"fmt"
+	"net"
+	"net/url"
+	"os"
+	"path/filepath"
+	"time"
+
+	"github.com/cometbft/cometbft/crypto"
+	cometcryptoed25519 "github.com/cometbft/cometbft/crypto/ed25519"
+	"github.com/cosmos/cosmos-sdk/codec"
+	"github.com/cosmos/cosmos-sdk/codec/legacy"
+	"github.com/cosmos/cosmos-sdk/codec/types"
+	cryptocodec "github.com/cosmos/cosmos-sdk/crypto/codec"
+	"github.com/cosmos/cosmos-sdk/crypto/keys/ed25519"
+	cryptotypes "github.com/cosmos/cosmos-sdk/crypto/types"
+	"github.com/cosmos/cosmos-sdk/types/bech32"
+	"github.com/strangelove-ventures/horcrux/v3/client"
+	"gopkg.in/yaml.v2"
+)
+
+type SignMode string
+
+const (
+	SignModeThreshold SignMode = "threshold"
+	SignModeSingle    SignMode = "single"
+)
+
+// Config maps to the on-disk yaml format
+type Config struct {
+	PrivValKeyDir       *string              `yaml:"keyDir,omitempty"`
+	ConnKeyFile         string               `yaml:"connKeyFile,omitempty"`
+	SignMode            SignMode             `yaml:"signMode"`
+	ThresholdModeConfig *ThresholdModeConfig `yaml:"thresholdMode,omitempty"`
+	ChainNodes          ChainNodes           `yaml:"chainNodes"`
+	DebugAddr           string               `yaml:"debugAddr"`
+	GRPCAddr            string               `yaml:"grpcAddr"`
+	MaxReadSize         int                  `yaml:"maxReadSize"`
+}
+
+func (c *Config) MustMarshalYaml() []byte {
+	out, err := yaml.Marshal(c)
+	if err != nil {
+		panic(err)
+	}
+	return out
+}
+
+func (c *Config) ValidateSingleSignerConfig() error {
+	return c.ChainNodes.Validate()
+}
+
+func (c *Config) ValidateThresholdModeConfig() error {
+	if err := c.ValidateSingleSignerConfig(); err != nil {
+		return err
+	}
+
+	if c.ThresholdModeConfig == nil {
+		return fmt.Errorf("cosigner config can't be empty")
+		// the rest of the checks depend on non-nil c.ThresholdModeConfig
+	}
+
+	numShards := len(c.ThresholdModeConfig.Cosigners)
+
+	if c.ThresholdModeConfig.Threshold <= numShards/2 {
+		return fmt.Errorf("threshold (%d) must be greater than number of shards (%d) / 2",
+			c.ThresholdModeConfig.Threshold, numShards)
+	}
+
+	if numShards < c.ThresholdModeConfig.Threshold {
+		return fmt.Errorf("number of shards (%d) must be greater or equal to threshold (%d)",
+			numShards, c.ThresholdModeConfig.Threshold)
+	}
+
+	if _, err := time.ParseDuration(c.ThresholdModeConfig.RaftTimeout); err != nil {
+		return fmt.Errorf("invalid raftTimeout: %w", err)
+	}
+
+	if _, err := time.ParseDuration(c.ThresholdModeConfig.GRPCTimeout); err != nil {
+		return fmt.Errorf("invalid grpcTimeout: %w", err)
+	}
+
+	if err := c.ThresholdModeConfig.Cosigners.Validate(); err != nil {
+		return err
+	}
+
+	return c.ThresholdModeConfig.Cosigners.Validate()
+}
+
+type RuntimeConfig struct {
+	HomeDir    string
+	ConfigFile string
+	StateDir   string
+	PidFile    string
+	Config     Config
+}
+
+func (c RuntimeConfig) CosignerSecurityECIES() (*CosignerSecurityECIES, error) {
+	keyFile, err := c.KeyFileExistsCosignerECIES()
+	if err != nil {
+		return nil, err
+	}
+
+	key, err := LoadCosignerECIESKey(keyFile)
+	if err != nil {
+		return nil, fmt.Errorf("error reading cosigner key (%s): %w", keyFile, err)
+	}
+
+	return NewCosignerSecurityECIES(key), nil
+}
+
+func (c RuntimeConfig) CosignerSecurityRSA() (*CosignerSecurityRSA, error) {
+	keyFile, err := c.KeyFileExistsCosignerRSA()
+	if err != nil {
+		return nil, err
+	}
+
+	key, err := LoadCosignerRSAKey(keyFile)
+	if err != nil {
+		return nil, fmt.Errorf("error reading cosigner key (%s): %w", keyFile, err)
+	}
+
+	return NewCosignerSecurityRSA(key), nil
+}
+
+// KeyDirectory returns the directory holding key material: the configured
+// keyDir when set, otherwise the home directory.
+func (c RuntimeConfig) KeyDirectory() string {
+	if c.Config.PrivValKeyDir != nil && *c.Config.PrivValKeyDir != "" {
+		return *c.Config.PrivValKeyDir
+	}
+	return c.HomeDir
+}
+
+func (c RuntimeConfig) KeyFilePathSingleSigner(chainID string) string {
+	return filepath.Join(c.KeyDirectory(), fmt.Sprintf("%s_priv_validator_key.json", chainID))
+}
+
+func (c RuntimeConfig) KeyFilePathCosigner(chainID string) string {
+	return filepath.Join(c.KeyDirectory(), fmt.Sprintf("%s_shard.json", chainID))
+}
+
+func (c RuntimeConfig) KeyFilePathCosignerRSA() string {
+	return filepath.Join(c.KeyDirectory(), "rsa_keys.json")
+}
+
+func (c RuntimeConfig) KeyFilePathCosignerECIES() string {
+	return filepath.Join(c.KeyDirectory(), "ecies_keys.json")
+}
+
+// ConnKeyFilePath returns the path of the persistent connection key file, or an
+// empty string when no connKeyFile is configured. A relative connKeyFile
+// resolves against the key directory.
+func (c RuntimeConfig) ConnKeyFilePath() string {
+	if c.Config.ConnKeyFile == "" {
+		return ""
+	}
+	if filepath.IsAbs(c.Config.ConnKeyFile) {
+		return c.Config.ConnKeyFile
+	}
+	return filepath.Join(c.KeyDirectory(), c.Config.ConnKeyFile)
+}
+
+func (c RuntimeConfig) PrivValStateFile(chainID string) string {
+	return filepath.Join(c.StateDir, fmt.Sprintf("%s_priv_validator_state.json", chainID))
+}
+
+func (c RuntimeConfig) CosignerStateFile(chainID string) string {
+	return filepath.Join(c.StateDir, fmt.Sprintf("%s_share_sign_state.json", chainID))
+}
+
+func (c RuntimeConfig) WriteConfigFile() error {
+	return os.WriteFile(c.ConfigFile, c.Config.MustMarshalYaml(), 0600)
+}
+
+func fileExists(file string) error {
+	stat, err := os.Stat(file)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("file doesn't exist at path (%s): %w", file, err)
+		}
+		return fmt.Errorf("unexpected error checking file existence (%s): %w", file, err)
+	}
+	if stat.IsDir() {
+		return fmt.Errorf("path is not a file (%s)", file)
+	}
+
+	return nil
+}
+
+func (c RuntimeConfig) KeyFileExistsSingleSigner(chainID string) (string, error) {
+	keyFile := c.KeyFilePathSingleSigner(chainID)
+	return keyFile, fileExists(keyFile)
+}
+
+func (c RuntimeConfig) KeyFileExistsCosigner(chainID string) (string, error) {
+	keyFile := c.KeyFilePathCosigner(chainID)
+	return keyFile, fileExists(keyFile)
+}
+
+func (c RuntimeConfig) KeyFileExistsCosignerRSA() (string, error) {
+	keyFile := c.KeyFilePathCosignerRSA()
+	return keyFile, fileExists(keyFile)
+}
+
+func (c RuntimeConfig) KeyFileExistsCosignerECIES() (string, error) {
+	keyFile := c.KeyFilePathCosignerECIES()
+	return keyFile, fileExists(keyFile)
+}
+
+// ThresholdModeConfig is the on disk config format for threshold sign mode.
+type ThresholdModeConfig struct {
+	Threshold   int             `yaml:"threshold"`
+	Cosigners   CosignersConfig `yaml:"cosigners"`
+	GRPCTimeout string          `yaml:"grpcTimeout"`
+	RaftTimeout string          `yaml:"raftTimeout"`
+}
+
+func (cfg *ThresholdModeConfig) LeaderElectMultiAddress() (string, error) {
+	addresses := make([]string, len(cfg.Cosigners))
+	for i, c := range cfg.Cosigners {
+		addresses[i] = c.P2PAddr
+	}
+	return client.MultiAddress(addresses)
+}
+
+// CosignerConfig is the on disk format representing a cosigner for threshold sign mode.
+type CosignerConfig struct {
+	ShardID int    `yaml:"shardID"`
+	P2PAddr string `yaml:"p2pAddr"`
+}
+
+type CosignersConfig []CosignerConfig
+
+func (cosigners CosignersConfig) Validate() error {
+	// Check IDs to make sure none are duplicated
+	if dupl := duplicateCosigners(cosigners); len(dupl) != 0 {
+		return fmt.Errorf("found duplicate cosigner shard ID(s) in args: %v", dupl)
+	}
+
+	shards := len(cosigners)
+
+	// Make sure that the cosigner IDs match the number of cosigners.
+	for _, cosigner := range cosigners {
+		if cosigner.ShardID < 1 || cosigner.ShardID > shards {
+			return fmt.Errorf("cosigner shard ID %d in args is out of range, must be between 1 and %d, inclusive",
+				cosigner.ShardID, shards)
+		}
+
+		url, err := url.Parse(cosigner.P2PAddr)
+		if err != nil {
+			return fmt.Errorf("failed to parse cosigner (shard ID: %d) p2p address: %w", cosigner.ShardID, err)
+		}
+
+		host, _, err := net.SplitHostPort(url.Host)
+		if err != nil {
+			return fmt.Errorf("failed to parse cosigner (shard ID: %d) host port: %w", cosigner.ShardID, err)
+		}
+
+		if host == "0.0.0.0" {
+			return fmt.Errorf("host cannot be 0.0.0.0, must be reachable from other cosigners")
+		}
+	}
+
+	// Check that exactly {num-shards} cosigners are in the list
+	if len(cosigners) != shards {
+		return fmt.Errorf("incorrect number of cosigners. expected (%d shards = %d cosigners)",
+			shards, shards)
+	}
+
+	return nil
+}
+
+func duplicateCosigners(cosigners []CosignerConfig) (duplicates map[int][]string) {
+	idAddrs := make(map[int][]string)
+	for _, cosigner := range cosigners {
+		// Collect all addresses assigned to each cosigner.
+		idAddrs[cosigner.ShardID] = append(idAddrs[cosigner.ShardID], cosigner.P2PAddr)
+	}
+
+	for shardID, cosigners := range idAddrs {
+		if len(cosigners) == 1 {
+			// One address per ID is correct.
+			delete(idAddrs, shardID)
+		}
+	}
+
+	if len(idAddrs) == 0 {
+		// No duplicates, return nil for simple check by caller.
+		return nil
+	}
+
+	// Non-nil result: there were duplicates.
+	return idAddrs
+}
+
+func CosignersFromFlag(cosigners []string) (out []CosignerConfig, err error) {
+	var errs []error
+	for i, c := range cosigners {
+		out = append(out, CosignerConfig{ShardID: i + 1, P2PAddr: c})
+	}
+	if len(errs) > 0 {
+		return nil, nil
+	}
+	return out, nil
+}
+
+type ChainNode struct {
+	PrivValAddr string `json:"privValAddr" yaml:"privValAddr"`
+	// ConnPubKeyHex is the hex encoded ed25519 public key of the chain node's
+	// connection identity, empty when the node is not authenticated.
+	ConnPubKeyHex string `json:"connPubKey,omitempty" yaml:"connPubKey,omitempty"`
+}
+
+// ConnPubKey returns the connection public key the chain node is required to
+// present during the privval handshake, or nil when the node is not
+// authenticated.
+func (cn ChainNode) ConnPubKey() (cometcryptoed25519.PubKey, error) {
+	if cn.ConnPubKeyHex == "" {
+		return nil, nil
+	}
+
+	pubKey, err := connPubKeyFromHex(cn.ConnPubKeyHex)
+	if err != nil {
+		return nil, fmt.Errorf("chain node %s: %w", cn.PrivValAddr, err)
+	}
+
+	return pubKey, nil
+}
+
+func (cn ChainNode) Validate() error {
+	if _, err := url.Parse(cn.PrivValAddr); err != nil {
+		return err
+	}
+
+	_, err := cn.ConnPubKey()
+	return err
+}
+
+type ChainNodes []ChainNode
+
+func (cns ChainNodes) Validate() error {
+	if cns == nil {
+		return nil
+	}
+	for _, cn := range cns {
+		if err := cn.Validate(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func ChainNodesFromFlag(nodes []string) (ChainNodes, error) {
+	out := make(ChainNodes, len(nodes))
+	for i, n := range nodes {
+		cn := ChainNode{PrivValAddr: n}
+		out[i] = cn
+	}
+	if err := out.Validate(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func PubKey(bech32BasePrefix string, pubKey crypto.PubKey) (string, error) {
+	if bech32BasePrefix != "" {
+		pubkey, err := cryptocodec.FromCmtPubKeyInterface(pubKey)
+		if err != nil {
+			return "", err
+		}
+		consPubPrefix := bech32BasePrefix + "valconspub"
+		pubKeyBech32, err := bech32.ConvertAndEncode(consPubPrefix, legacy.Cdc.Amino.MustMarshalBinaryBare(pubkey))
+		if err != nil {
+			return "", err
+		}
+		return pubKeyBech32, nil
+	}
+
+	registry := types.NewInterfaceRegistry()
+	marshaler := codec.NewProtoCodec(registry)
+	var pk *cryptotypes.PubKey
+	registry.RegisterInterface("cosmos.crypto.PubKey", pk)
+	registry.RegisterImplementations(pk, &ed25519.PubKey{})
+	sdkPK, err := cryptocodec.FromCmtPubKeyInterface(pubKey)
+	if err != nil {
+		return "", err
+	}
+	pubKeyJSON, err := marshaler.MarshalInterfaceJSON(sdkPK)
+	if err != nil {
+		return "", err
+	}
+	return string(pubKeyJSON), nil
+}
