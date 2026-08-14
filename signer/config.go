@@ -130,43 +130,29 @@ func (c RuntimeConfig) CosignerSecurityRSA() (*CosignerSecurityRSA, error) {
 	return NewCosignerSecurityRSA(key), nil
 }
 
-func (c RuntimeConfig) cachedKeyDirectory() string {
-	if c.Config.PrivValKeyDir != nil {
+// KeyDirectory returns the directory holding key material: the configured
+// keyDir when set, otherwise the home directory.
+func (c RuntimeConfig) KeyDirectory() string {
+	if c.Config.PrivValKeyDir != nil && *c.Config.PrivValKeyDir != "" {
 		return *c.Config.PrivValKeyDir
 	}
-	return ""
+	return c.HomeDir
 }
 
 func (c RuntimeConfig) KeyFilePathSingleSigner(chainID string) string {
-	keyDir := c.HomeDir
-	if kd := c.cachedKeyDirectory(); kd != "" {
-		keyDir = kd
-	}
-	return filepath.Join(keyDir, fmt.Sprintf("%s_priv_validator_key.json", chainID))
+	return filepath.Join(c.KeyDirectory(), fmt.Sprintf("%s_priv_validator_key.json", chainID))
 }
 
 func (c RuntimeConfig) KeyFilePathCosigner(chainID string) string {
-	keyDir := c.HomeDir
-	if kd := c.cachedKeyDirectory(); kd != "" {
-		keyDir = kd
-	}
-	return filepath.Join(keyDir, fmt.Sprintf("%s_shard.json", chainID))
+	return filepath.Join(c.KeyDirectory(), fmt.Sprintf("%s_shard.json", chainID))
 }
 
 func (c RuntimeConfig) KeyFilePathCosignerRSA() string {
-	keyDir := c.HomeDir
-	if kd := c.cachedKeyDirectory(); kd != "" {
-		keyDir = kd
-	}
-	return filepath.Join(keyDir, "rsa_keys.json")
+	return filepath.Join(c.KeyDirectory(), "rsa_keys.json")
 }
 
 func (c RuntimeConfig) KeyFilePathCosignerECIES() string {
-	keyDir := c.HomeDir
-	if kd := c.cachedKeyDirectory(); kd != "" {
-		keyDir = kd
-	}
-	return filepath.Join(keyDir, "ecies_keys.json")
+	return filepath.Join(c.KeyDirectory(), "ecies_keys.json")
 }
 
 func (c RuntimeConfig) PrivValStateFile(chainID string) string {
