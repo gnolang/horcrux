@@ -31,7 +31,7 @@ func createListener(nodeID string, homedir string) (string, func(), error) {
 		homedir,
 		"127.0.0.1:"+port,
 		500*time.Millisecond,
-		nil, nil, nil)
+		nil, nil, nil, nil)
 
 	transportManager, err := s.Open()
 	if err != nil {

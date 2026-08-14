@@ -110,7 +110,15 @@ func (c *Config) ValidateThresholdModeConfig() error {
 		return err
 	}
 
-	return c.ThresholdModeConfig.Cosigners.Validate()
+	if c.ThresholdModeConfig.ClusterTLSEnabled() {
+		// Every cosigner must carry a valid tlsPubKey so the allowlist is
+		// complete; a partial allowlist would silently leave a peer unauthenticated.
+		if _, err := c.ThresholdModeConfig.ClusterPeerPubKeys(); err != nil {
+			return fmt.Errorf("clusterKeyFile is set, so every cosigner needs a valid tlsPubKey: %w", err)
+		}
+	}
+
+	return nil
 }
 
 type RuntimeConfig struct {
@@ -187,6 +195,20 @@ func (c RuntimeConfig) ConnKeyFilePath() string {
 	return filepath.Join(c.KeyDirectory(), c.Config.ConnKeyFile)
 }
 
+// ClusterKeyFilePath returns the path of the cosigner mutual-TLS cluster identity
+// key, or empty when cluster TLS is not configured. A relative clusterKeyFile
+// resolves against the key directory.
+func (c RuntimeConfig) ClusterKeyFilePath() string {
+	if c.Config.ThresholdModeConfig == nil || c.Config.ThresholdModeConfig.ClusterKeyFile == "" {
+		return ""
+	}
+	f := c.Config.ThresholdModeConfig.ClusterKeyFile
+	if filepath.IsAbs(f) {
+		return f
+	}
+	return filepath.Join(c.KeyDirectory(), f)
+}
+
 func (c RuntimeConfig) PrivValStateFile(chainID string) string {
 	return filepath.Join(c.StateDir, fmt.Sprintf("%s_priv_validator_state.json", chainID))
 }
@@ -236,10 +258,33 @@ func (c RuntimeConfig) KeyFileExistsCosignerECIES() (string, error) {
 
 // ThresholdModeConfig is the on disk config format for threshold sign mode.
 type ThresholdModeConfig struct {
-	Threshold   int             `yaml:"threshold"`
-	Cosigners   CosignersConfig `yaml:"cosigners"`
-	GRPCTimeout string          `yaml:"grpcTimeout"`
-	RaftTimeout string          `yaml:"raftTimeout"`
+	Threshold int             `yaml:"threshold"`
+	Cosigners CosignersConfig `yaml:"cosigners"`
+	// ClusterKeyFile, when set, enables mutual TLS on the cosigner cluster
+	// transport using the ed25519 identity in this file. Each cosigner entry must
+	// then carry a tlsPubKey, and those keys form the peer allowlist.
+	ClusterKeyFile string `yaml:"clusterKeyFile,omitempty"`
+	GRPCTimeout    string `yaml:"grpcTimeout"`
+	RaftTimeout    string `yaml:"raftTimeout"`
+}
+
+// ClusterTLSEnabled reports whether cosigner mutual TLS is configured.
+func (cfg *ThresholdModeConfig) ClusterTLSEnabled() bool {
+	return cfg.ClusterKeyFile != ""
+}
+
+// ClusterPeerPubKeys returns the ed25519 public keys of all cosigners, forming
+// the mutual-TLS peer allowlist.
+func (cfg *ThresholdModeConfig) ClusterPeerPubKeys() ([]cometcryptoed25519.PubKey, error) {
+	out := make([]cometcryptoed25519.PubKey, 0, len(cfg.Cosigners))
+	for _, c := range cfg.Cosigners {
+		pub, err := connPubKeyFromHex(c.TLSPubKey)
+		if err != nil {
+			return nil, fmt.Errorf("cosigner shard %d tlsPubKey: %w", c.ShardID, err)
+		}
+		out = append(out, pub)
+	}
+	return out, nil
 }
 
 func (cfg *ThresholdModeConfig) LeaderElectMultiAddress() (string, error) {
@@ -254,6 +299,9 @@ func (cfg *ThresholdModeConfig) LeaderElectMultiAddress() (string, error) {
 type CosignerConfig struct {
 	ShardID int    `yaml:"shardID"`
 	P2PAddr string `yaml:"p2pAddr"`
+	// TLSPubKey is the hex ed25519 public key of this cosigner's cluster identity,
+	// used for the mutual-TLS allowlist when clusterKeyFile is set.
+	TLSPubKey string `yaml:"tlsPubKey,omitempty"`
 }
 
 type CosignersConfig []CosignerConfig

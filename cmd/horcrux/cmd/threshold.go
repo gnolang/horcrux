@@ -24,6 +24,16 @@ func NewThresholdValidator(
 
 	thresholdCfg := config.Config.ThresholdModeConfig
 
+	// Optional mutual TLS on the cosigner cluster transport. Nil when
+	// clusterKeyFile is unset (insecure transport, the historical default).
+	clusterTLS, err := signer.ClusterTLSConfig(&config)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to build cluster TLS config: %w", err)
+	}
+	if clusterTLS != nil {
+		logger.Info("Cosigner cluster mutual TLS enabled", "key", config.ClusterKeyFilePath())
+	}
+
 	remoteCosigners := make([]signer.Cosigner, 0, len(thresholdCfg.Cosigners)-1)
 
 	var p2pListen string
@@ -41,7 +51,7 @@ func NewThresholdValidator(
 
 	for _, c := range thresholdCfg.Cosigners {
 		if c.ShardID != security.GetID() {
-			rc, err := signer.NewRemoteCosigner(c.ShardID, c.P2PAddr)
+			rc, err := signer.NewRemoteCosigner(c.ShardID, c.P2PAddr, clusterTLS)
 			if err != nil {
 				return nil, nil, fmt.Errorf("failed to initialize remote cosigner: %w", err)
 			}
@@ -79,7 +89,7 @@ func NewThresholdValidator(
 
 	// Start RAFT store listener
 	raftStore := signer.NewRaftStore(nodeID,
-		raftDir, p2pListen, raftTimeout, logger, localCosigner, remoteCosigners)
+		raftDir, p2pListen, raftTimeout, logger, localCosigner, remoteCosigners, clusterTLS)
 	if err := raftStore.Start(); err != nil {
 		return nil, nil, fmt.Errorf("error starting raft store: %w", err)
 	}

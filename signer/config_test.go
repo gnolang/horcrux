@@ -127,6 +127,33 @@ chainNodes:
 	require.Nil(t, unpinned)
 }
 
+func TestClusterPeerPubKeys(t *testing.T) {
+	k1 := cometcryptoed25519.GenPrivKey().PubKey()
+	k2 := cometcryptoed25519.GenPrivKey().PubKey()
+
+	cfg := &signer.ThresholdModeConfig{
+		Cosigners: signer.CosignersConfig{
+			{ShardID: 1, P2PAddr: "tcp://10.0.0.1:2222", TLSPubKey: hex.EncodeToString(k1.Bytes())},
+			{ShardID: 2, P2PAddr: "tcp://10.0.0.2:2222", TLSPubKey: hex.EncodeToString(k2.Bytes())},
+		},
+	}
+
+	require.False(t, cfg.ClusterTLSEnabled())
+	cfg.ClusterKeyFile = "cluster_key.json"
+	require.True(t, cfg.ClusterTLSEnabled())
+
+	keys, err := cfg.ClusterPeerPubKeys()
+	require.NoError(t, err)
+	require.Len(t, keys, 2)
+	require.True(t, keys[0].Equals(k1))
+	require.True(t, keys[1].Equals(k2))
+
+	// A cosigner missing/invalid tlsPubKey makes the allowlist incomplete.
+	cfg.Cosigners[1].TLSPubKey = ""
+	_, err = cfg.ClusterPeerPubKeys()
+	require.Error(t, err)
+}
+
 func TestValidateSingleSignerConfig(t *testing.T) {
 	type testCase struct {
 		name      string

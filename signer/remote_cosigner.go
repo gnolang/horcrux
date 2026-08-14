@@ -2,6 +2,7 @@ package signer
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"net/url"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/strangelove-ventures/horcrux/v3/signer/proto"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 )
 
@@ -23,9 +25,11 @@ type RemoteCosigner struct {
 	client proto.CosignerClient
 }
 
-// NewRemoteCosigner returns a newly initialized RemoteCosigner
-func NewRemoteCosigner(id int, address string) (*RemoteCosigner, error) {
-	client, err := getGRPCClient(address)
+// NewRemoteCosigner returns a newly initialized RemoteCosigner. tlsConfig enables
+// mutual TLS to the peer when non-nil; a nil tlsConfig uses an insecure transport
+// (the historical default).
+func NewRemoteCosigner(id int, address string, tlsConfig *tls.Config) (*RemoteCosigner, error) {
+	client, err := getGRPCClient(address, tlsConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -63,7 +67,7 @@ func (cosigner *RemoteCosigner) VerifySignature(_ string, _, _ []byte) bool {
 	return false
 }
 
-func getGRPCClient(address string) (proto.CosignerClient, error) {
+func getGRPCClient(address string, tlsConfig *tls.Config) (proto.CosignerClient, error) {
 	var grpcAddress string
 	url, err := url.Parse(address)
 	if err != nil {
@@ -71,11 +75,20 @@ func getGRPCClient(address string) (proto.CosignerClient, error) {
 	} else {
 		grpcAddress = url.Host
 	}
-	conn, err := grpc.Dial(grpcAddress, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := grpc.Dial(grpcAddress, grpc.WithTransportCredentials(ClusterTransportCreds(tlsConfig)))
 	if err != nil {
 		return nil, err
 	}
 	return proto.NewCosignerClient(conn), nil
+}
+
+// ClusterTransportCreds returns mutual-TLS transport credentials when tlsConfig
+// is set, or insecure credentials (the historical default) when it is nil.
+func ClusterTransportCreds(tlsConfig *tls.Config) credentials.TransportCredentials {
+	if tlsConfig == nil {
+		return insecure.NewCredentials()
+	}
+	return credentials.NewTLS(tlsConfig)
 }
 
 // Implements the cosigner interface

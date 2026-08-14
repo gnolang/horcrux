@@ -18,6 +18,29 @@ import (
 // presents a connection identity that is not in the configured allowlist.
 var ErrClusterPeerNotAllowed = errors.New("cluster peer public key not in allowlist")
 
+// ClusterTLSConfig returns the mutual-TLS config for the cosigner cluster
+// transport, or (nil, nil) when clusterKeyFile is not configured (insecure
+// transport, the historical default). The same config is used for both the
+// cluster gRPC server and the client dials to peers.
+func ClusterTLSConfig(cfg *RuntimeConfig) (*tls.Config, error) {
+	keyFile := cfg.ClusterKeyFilePath()
+	if keyFile == "" {
+		return nil, nil
+	}
+
+	identity, err := LoadConnKey(keyFile)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load cluster key: %w", err)
+	}
+
+	allowed, err := cfg.Config.ThresholdModeConfig.ClusterPeerPubKeys()
+	if err != nil {
+		return nil, err
+	}
+
+	return clusterTLSConfig(identity, allowed)
+}
+
 // clusterTLSConfig builds a mutual-TLS config for the cosigner cluster transport.
 //
 // identity is this cosigner's ed25519 key; it is presented as a self-signed

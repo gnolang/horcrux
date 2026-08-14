@@ -94,3 +94,60 @@ the CometBFT encoding (`{"priv_key":{"type":…,"value":…}}`) and whose public
 
 `gnoland secrets get node_id` reports the same key, but bech32 encoded (`gpub1…`), which
 has to be converted to hex before it can be used as `connPubKey`.
+
+## Cosigner-to-cosigner mutual TLS
+
+The two directions above secure the cosigner ↔ chain-node connection. The
+cosigner ↔ cosigner cluster transport (raft consensus + the Cosigner signing RPC,
+served on the p2p port) is unauthenticated and unencrypted by default. Mutual TLS
+closes that: it authenticates every peer by a pinned ed25519 public key and
+encrypts the traffic. It is opt-in and off by default.
+
+Nonce shares are already individually encrypted and signed, so mTLS does not
+prevent key extraction (that is handled at the application layer); it protects
+confidentiality of cluster traffic and blocks unauthenticated access and MITM.
+
+### Enabling it
+
+Each cosigner gets its own ed25519 cluster identity, and every cosigner's public
+key is listed on the matching `cosigners` entry across the cluster (the allowlist).
+
+1. On each cosigner, create its cluster key and note the printed public key:
+
+    ```bash
+    horcrux create-cluster-key
+    ```
+
+2. In each cosigner's `config.yaml`, set `clusterKeyFile` under `thresholdMode`
+   and add every cosigner's `tlsPubKey` (including its own) to the `cosigners`
+   entries:
+
+    ```yaml
+    thresholdMode:
+      threshold: 2
+      clusterKeyFile: cluster_key.json
+      cosigners:
+        - shardID: 1
+          p2pAddr: tcp://horcrux-1:2222
+          tlsPubKey: 51d0d694...   # cosigner 1's cluster public key
+        - shardID: 2
+          p2pAddr: tcp://horcrux-2:2222
+          tlsPubKey: a1b2c3d4...   # cosigner 2's cluster public key
+        - shardID: 3
+          p2pAddr: tcp://horcrux-3:2222
+          tlsPubKey: 9e8f7a6b...   # cosigner 3's cluster public key
+    ```
+
+    `clusterKeyFile` resolves like other key files (relative to `keyDir`, else the
+    home directory). When it is set, every `cosigners` entry must carry a valid
+    `tlsPubKey`, or the process refuses to start — a partial allowlist would leave
+    a peer unauthenticated.
+
+3. Roll it out with a coordinated restart. mTLS is a hard switch: a cosigner with
+   it enabled cannot talk to one without it, so provision the keys and config on
+   all cosigners first, then restart them together (a brief maintenance-window
+   downtime, like any upgrade). There is no mixed-mode transition.
+
+Authentication uses self-signed certificates pinned by public key — there is no
+certificate authority to run, mirroring the allowlist model already used for
+cosigner-to-cosigner nonce encryption.
