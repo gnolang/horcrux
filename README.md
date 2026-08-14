@@ -22,7 +22,6 @@ For more on how the Horcrux MPC signing flow works, see [`docs/signing.md`](/doc
 
 ![Screenshot from 2022-03-07 18-09-49](https://user-images.githubusercontent.com/6722152/157145772-8557b4b5-a0cc-4073-8834-86afda1900fc.png)
 
-
 ## Raft
 
 Horcrux v2.x introduces [Raft](https://raft.github.io/) For leader election and high watermark consensus.
@@ -40,6 +39,8 @@ Horcrux signer cluster configured with 5 total nodes, threshold 3.
 ## Running Horcrux
 
 See documentation in [`docs/migrating.md`](/docs/migrating.md) to learn how to upgrade your validator infrastructure with Horcrux.
+
+See [`docs/authentication.md`](/docs/authentication.md) to optionally authenticate the connections between Horcrux and your chain nodes.
 
 ## Security
 

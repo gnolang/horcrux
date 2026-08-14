@@ -34,7 +34,10 @@ type ReconnRemoteSigner struct {
 
 	address string
 	privKey cometcryptoed25519.PrivKey
-	privVal PrivValidator
+	// nodePubKey is the connection public key the chain node must present, or nil
+	// when the node is not authenticated.
+	nodePubKey cometcryptoed25519.PubKey
+	privVal    PrivValidator
 
 	dialer net.Dialer
 
@@ -43,7 +46,8 @@ type ReconnRemoteSigner struct {
 
 // NewReconnRemoteSigner return a ReconnRemoteSigner that will dial using the given
 // dialer and respond to any signature requests over the connection
-// using the given privVal.
+// using the given privVal. connAuth optionally authenticates either end of that
+// connection.
 //
 // If the connection is broken, the ReconnRemoteSigner will attempt to reconnect.
 func NewReconnRemoteSigner(
@@ -52,12 +56,19 @@ func NewReconnRemoteSigner(
 	privVal PrivValidator,
 	dialer net.Dialer,
 	maxReadSize int,
+	connAuth ConnAuth,
 ) *ReconnRemoteSigner {
+	privKey := connAuth.PrivKey
+	if privKey == nil {
+		privKey = cometcryptoed25519.GenPrivKey()
+	}
+
 	rs := &ReconnRemoteSigner{
 		address:     address,
 		privVal:     privVal,
 		dialer:      dialer,
-		privKey:     cometcryptoed25519.GenPrivKey(),
+		privKey:     privKey,
+		nodePubKey:  connAuth.NodePubKey,
 		maxReadSize: maxReadSize,
 	}
 
@@ -90,6 +101,11 @@ func (rs *ReconnRemoteSigner) establishConnection(ctx context.Context) (net.Conn
 	if err != nil {
 		netConn.Close()
 		return nil, fmt.Errorf("secret connection error: %w", err)
+	}
+
+	if err := verifyNodePubKey(rs.nodePubKey, conn.RemotePubKey()); err != nil {
+		conn.Close()
+		return nil, err
 	}
 
 	return conn, nil
@@ -287,30 +303,55 @@ func getRemoteSignerError(err error) *cometprotoprivval.RemoteSignerError {
 	}
 }
 
+// StartRemoteSigners starts a signer for each chain node. connKey is the signer's
+// persistent connection identity, shared by every node connection; a nil connKey
+// presents a fresh identity per node connection.
 func StartRemoteSigners(
 	services []cometservice.Service,
 	logger cometlog.Logger,
 	privVal PrivValidator,
-	nodes []string,
+	nodes []ChainNode,
 	maxReadSize int,
+	connKey cometcryptoed25519.PrivKey,
 ) ([]cometservice.Service, error) {
-	var err error
+	// Resolve every node's expected connection key up front so a malformed one
+	// cannot leave a partially started set of signers behind.
+	auths := make([]ConnAuth, len(nodes))
+	for i, node := range nodes {
+		nodePubKey, err := node.ConnPubKey()
+		if err != nil {
+			return nil, err
+		}
+		auths[i] = ConnAuth{PrivKey: connKey, NodePubKey: nodePubKey}
+	}
+
 	go StartMetrics()
-	for _, node := range nodes {
+
+	for i, node := range nodes {
 		// CometBFT requires a connection within 3 seconds of start or crashes
 		// A long timeout such as 30 seconds would cause the sentry to fail in loops
 		// Use a short timeout and dial often to connect within 3 second window
 		dialer := net.Dialer{Timeout: 2 * time.Second}
-		s := NewReconnRemoteSigner(node, logger, privVal, dialer, maxReadSize)
+		s := NewReconnRemoteSigner(node.PrivValAddr, logger, privVal, dialer, maxReadSize, auths[i])
 
-		err = s.Start()
-		if err != nil {
+		// A pin only protects a node the operator can confirm is pinned, and a
+		// mistyped config key is otherwise indistinguishable from no pin at all.
+		if auths[i].NodePubKey != nil {
+			logger.Info(
+				"Authenticating chain node",
+				"address", node.PrivValAddr,
+				"pub_key", node.ConnPubKeyHex,
+			)
+		}
+
+		if err := s.Start(); err != nil {
 			return nil, err
 		}
 
 		services = append(services, s)
 	}
-	return services, err
+
+	return services, nil
 }
 
 func (rs *ReconnRemoteSigner) closeConn(conn net.Conn) {

@@ -43,6 +43,8 @@ linters-settings:
         alias: cometcrypto
       - pkg: github.com/cometbft/cometbft/crypto/ed25519
         alias: cometcryptoed25519
+      - pkg: github.com/cometbft/cometbft/crypto/secp256k1
+        alias: cometcryptosecp256k1
       - pkg: github.com/cometbft/cometbft/crypto/encoding
         alias: cometcryptoencoding
       - pkg: github.com/tendermint/go-amino
@@ -61,6 +63,8 @@ linters-settings:
         alias: cometrand
       - pkg: github.com/cometbft/cometbft/libs/service
         alias: cometservice
+      - pkg: github.com/cometbft/cometbft/p2p
+        alias: cometp2p
       - pkg: github.com/cometbft/cometbft/p2p/conn
         alias: cometp2pconn
       - pkg: github.com/cometbft/cometbft/privval
@@ -85,7 +89,7 @@ linters-settings:
         alias: ecies
       - pkg: github.com/grpc-ecosystem/go-grpc-middleware/retry
         alias: grpcretry
-      - pkg : github.com/kraken-hpc/go-fork
+      - pkg: github.com/kraken-hpc/go-fork
         alias: fork
       - pkg: github.com/armon/go-metrics/prometheus
         alias: gmprometheus

@@ -71,7 +71,26 @@ func startCmd() *cobra.Command {
 
 			go EnableDebugAndMetrics(cmd.Context(), out)
 
-			services, err = signer.StartRemoteSigners(services, logger, val, config.Config.Nodes(), config.Config.MaxReadSize)
+			connKey, err := loadConfiguredConnKey(config)
+			if err != nil {
+				return err
+			}
+			if connKey != nil {
+				logger.Info(
+					"Authenticating to chain nodes with persistent connection key",
+					"file", config.ConnKeyFilePath(),
+					"pub_key", signer.ConnPubKeyHex(connKey),
+				)
+			}
+
+			services, err = signer.StartRemoteSigners(
+				services,
+				logger,
+				val,
+				config.Config.ChainNodes,
+				config.Config.MaxReadSize,
+				connKey,
+			)
 			if err != nil {
 				return fmt.Errorf("failed to start remote signer(s): %w", err)
 			}

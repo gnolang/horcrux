@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/cometbft/cometbft/crypto"
+	cometcryptoed25519 "github.com/cometbft/cometbft/crypto/ed25519"
 	"github.com/cosmos/cosmos-sdk/codec"
 	"github.com/cosmos/cosmos-sdk/codec/legacy"
 	"github.com/cosmos/cosmos-sdk/codec/types"
@@ -30,19 +31,13 @@ const (
 // Config maps to the on-disk yaml format
 type Config struct {
 	PrivValKeyDir       *string              `yaml:"keyDir,omitempty"`
+	ConnKeyFile         string               `yaml:"connKeyFile,omitempty"`
 	SignMode            SignMode             `yaml:"signMode"`
 	ThresholdModeConfig *ThresholdModeConfig `yaml:"thresholdMode,omitempty"`
 	ChainNodes          ChainNodes           `yaml:"chainNodes"`
 	DebugAddr           string               `yaml:"debugAddr"`
 	GRPCAddr            string               `yaml:"grpcAddr"`
 	MaxReadSize         int                  `yaml:"maxReadSize"`
-}
-
-func (c *Config) Nodes() (out []string) {
-	for _, n := range c.ChainNodes {
-		out = append(out, n.PrivValAddr)
-	}
-	return out
 }
 
 func (c *Config) MustMarshalYaml() []byte {
@@ -153,6 +148,19 @@ func (c RuntimeConfig) KeyFilePathCosignerRSA() string {
 
 func (c RuntimeConfig) KeyFilePathCosignerECIES() string {
 	return filepath.Join(c.KeyDirectory(), "ecies_keys.json")
+}
+
+// ConnKeyFilePath returns the path of the persistent connection key file, or an
+// empty string when no connKeyFile is configured. A relative connKeyFile
+// resolves against the key directory.
+func (c RuntimeConfig) ConnKeyFilePath() string {
+	if c.Config.ConnKeyFile == "" {
+		return ""
+	}
+	if filepath.IsAbs(c.Config.ConnKeyFile) {
+		return c.Config.ConnKeyFile
+	}
+	return filepath.Join(c.KeyDirectory(), c.Config.ConnKeyFile)
 }
 
 func (c RuntimeConfig) PrivValStateFile(chainID string) string {
@@ -301,10 +309,33 @@ func CosignersFromFlag(cosigners []string) (out []CosignerConfig, err error) {
 
 type ChainNode struct {
 	PrivValAddr string `json:"privValAddr" yaml:"privValAddr"`
+	// ConnPubKeyHex is the hex encoded ed25519 public key of the chain node's
+	// connection identity, empty when the node is not authenticated.
+	ConnPubKeyHex string `json:"connPubKey,omitempty" yaml:"connPubKey,omitempty"`
+}
+
+// ConnPubKey returns the connection public key the chain node is required to
+// present during the privval handshake, or nil when the node is not
+// authenticated.
+func (cn ChainNode) ConnPubKey() (cometcryptoed25519.PubKey, error) {
+	if cn.ConnPubKeyHex == "" {
+		return nil, nil
+	}
+
+	pubKey, err := connPubKeyFromHex(cn.ConnPubKeyHex)
+	if err != nil {
+		return nil, fmt.Errorf("chain node %s: %w", cn.PrivValAddr, err)
+	}
+
+	return pubKey, nil
 }
 
 func (cn ChainNode) Validate() error {
-	_, err := url.Parse(cn.PrivValAddr)
+	if _, err := url.Parse(cn.PrivValAddr); err != nil {
+		return err
+	}
+
+	_, err := cn.ConnPubKey()
 	return err
 }
 
