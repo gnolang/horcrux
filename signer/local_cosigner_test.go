@@ -18,7 +18,7 @@ import (
 	"github.com/ethereum/go-ethereum/crypto/secp256k1"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
-	tsed25519 "gitlab.com/unit410/threshold-ed25519/pkg"
+	tsed25519 "github.com/strangelove-ventures/horcrux/v3/signer/tsed25519"
 )
 
 const (

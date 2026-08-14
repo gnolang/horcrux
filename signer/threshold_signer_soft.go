@@ -6,8 +6,8 @@ import (
 	"errors"
 	"fmt"
 
-	"gitlab.com/unit410/edwards25519"
-	tsed25519 "gitlab.com/unit410/threshold-ed25519/pkg"
+	"github.com/strangelove-ventures/horcrux/v3/signer/edwards25519"
+	tsed25519 "github.com/strangelove-ventures/horcrux/v3/signer/tsed25519"
 )
 
 var _ ThresholdSigner = &ThresholdSignerSoft{}

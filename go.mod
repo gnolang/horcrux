@@ -22,8 +22,7 @@ require (
 	github.com/spf13/viper v1.19.0
 	github.com/stretchr/testify v1.11.1
 	github.com/tendermint/go-amino v0.16.0
-	gitlab.com/unit410/edwards25519 v0.0.0-20220725154547-61980033348e
-	gitlab.com/unit410/threshold-ed25519 v0.0.0-20220812172601-56783212c4cc
+	golang.org/x/crypto v0.52.0
 	golang.org/x/sync v0.20.0
 	google.golang.org/grpc v1.82.1
 	gopkg.in/yaml.v2 v2.4.0
@@ -119,7 +118,6 @@ require (
 	go.etcd.io/bbolt v1.4.0-alpha.0.0.20240404170359-43604f3112c5 // indirect
 	go.opencensus.io v0.24.0 // indirect
 	go.uber.org/multierr v1.10.0 // indirect
-	golang.org/x/crypto v0.52.0 // indirect
 	golang.org/x/exp v0.0.0-20240719175910-8a7402abbf56 // indirect
 	golang.org/x/net v0.54.0 // indirect
 	golang.org/x/sys v0.45.0 // indirect
