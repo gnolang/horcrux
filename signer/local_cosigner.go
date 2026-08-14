@@ -57,10 +57,6 @@ type ChainState struct {
 	lastSignState *SignState
 	// signer generates nonces, combines nonces, signs, and verifies signatures.
 	signer ThresholdSigner
-	// signMu serializes the check-sign-save sequence for this chain. Without it,
-	// two concurrent requests at the same HRS can both pass the pre-check before
-	// either advances the sign state and produce signatures over different blocks.
-	signMu sync.Mutex
 }
 
 // StartNoncePruner periodically prunes nonces that have expired.
@@ -231,11 +227,6 @@ func (cosigner *LocalCosigner) sign(req CosignerSignRequest) (CosignerSignRespon
 		return res, err
 	}
 
-	// Serialize the whole check-sign-save sequence for this chain so two
-	// concurrent requests at the same HRS cannot both pass the pre-check.
-	ccs.signMu.Lock()
-	defer ccs.signMu.Unlock()
-
 	hrst, hasVoteExtensions, err := verifySignPayload(chainID, req.SignBytes, req.VoteExtensionSignBytes)
 	if err != nil {
 		return res, err
@@ -358,8 +349,8 @@ func (cosigner *LocalCosigner) generateNonces() ([]Nonces, error) {
 }
 
 func (cosigner *LocalCosigner) LoadSignStateIfNecessary(chainID string) error {
-	if chainID == "" {
-		return fmt.Errorf("chain id cannot be empty")
+	if err := ValidateChainID(chainID); err != nil {
+		return err
 	}
 
 	if _, ok := cosigner.chainState.Load(chainID); ok {

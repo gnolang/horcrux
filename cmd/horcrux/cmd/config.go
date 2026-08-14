@@ -122,8 +122,9 @@ for threshold signer mode, --cosigner flags and --threshold flag are required.
 			// silence usage after all input has been validated
 			cmd.SilenceUsage = true
 
-			// create all directories up to the state directory
-			if err = os.MkdirAll(config.StateDir, 0755); err != nil {
+			// create all directories up to the state directory. 0700: these dirs
+			// hold key shards and sign state and must not be group/world readable.
+			if err = os.MkdirAll(config.StateDir, 0700); err != nil {
 				return err
 			}
 			// create the config file

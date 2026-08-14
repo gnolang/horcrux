@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"time"
 
 	"github.com/cometbft/cometbft/crypto"
@@ -20,6 +21,29 @@ import (
 	"github.com/strangelove-ventures/horcrux/v3/client"
 	"gopkg.in/yaml.v2"
 )
+
+// maxChainIDLen mirrors CometBFT's chain-id length limit.
+const maxChainIDLen = 50
+
+// chainIDPattern is the set of characters allowed in a chain ID. It excludes path
+// separators and "." runs so a chain ID (which is used to build key and state
+// file names) cannot traverse outside its directory.
+var chainIDPattern = regexp.MustCompile(`^[a-zA-Z0-9_-]+(?:\.[a-zA-Z0-9_-]+)*$`)
+
+// ValidateChainID rejects chain IDs that are empty, too long, or could escape the
+// key/state directory when used to build a file path.
+func ValidateChainID(chainID string) error {
+	if chainID == "" {
+		return fmt.Errorf("chain id cannot be empty")
+	}
+	if len(chainID) > maxChainIDLen {
+		return fmt.Errorf("chain id too long: %d > %d", len(chainID), maxChainIDLen)
+	}
+	if !chainIDPattern.MatchString(chainID) {
+		return fmt.Errorf("chain id %q contains invalid characters", chainID)
+	}
+	return nil
+}
 
 type SignMode string
 

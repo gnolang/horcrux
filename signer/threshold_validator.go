@@ -376,6 +376,9 @@ func newSameBlockError(chainID string, hrs HRSKey) *SameBlockError {
 }
 
 func (pv *ThresholdValidator) LoadSignStateIfNecessary(chainID string) error {
+	if err := ValidateChainID(chainID); err != nil {
+		return err
+	}
 	if _, ok := pv.chainState.Load(chainID); ok {
 		return nil
 	}

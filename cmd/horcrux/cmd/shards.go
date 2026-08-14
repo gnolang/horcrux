@@ -80,8 +80,8 @@ func createCosignerEd25519ShardsCmd() *cobra.Command {
 				return fmt.Errorf("key-file flag must not be empty")
 			}
 
-			if chainID == "" {
-				return fmt.Errorf("chain-id flag must not be empty")
+			if err := signer.ValidateChainID(chainID); err != nil {
+				return err
 			}
 
 			if threshold == 0 {
