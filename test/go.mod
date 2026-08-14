@@ -1,6 +1,6 @@
 module github.com/strangelove-ventures/horcrux/test
 
-go 1.21
+go 1.23
 
 require (
 	github.com/cometbft/cometbft v0.38.2
