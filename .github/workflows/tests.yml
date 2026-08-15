@@ -17,14 +17,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # Install and setup go
-      - name: Set up Go 1.21
-        uses: actions/setup-go@v4
+      - name: Set up Go
+        uses: actions/setup-go@v5
         with:
-          go-version: '^1.21.4'
+          go-version-file: go.mod
 
       # checkout horcrux
       - name: checkout horcrux
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       # run tests
       - name: run horcrux tests
@@ -34,7 +34,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        test: 
+        test:
           - TestMultipleChainHorcrux
           - TestChainPureHorcrux
           - TestDownedSigners2of3
@@ -47,14 +47,14 @@ jobs:
           - TestHorcruxProxyGRPC
     steps:
       # Install and setup go
-      - name: Set up Go 1.21
-        uses: actions/setup-go@v4
+      - name: Set up Go
+        uses: actions/setup-go@v5
         with:
-          go-version: '^1.21.4'
+          go-version-file: go.mod
 
       # checkout horcrux
       - name: checkout horcrux
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       # run test matrix
       - name: run test
