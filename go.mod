@@ -2,6 +2,11 @@ module github.com/strangelove-ventures/horcrux/v3
 
 go 1.25.0
 
+// Minimum toolchain floor for the patched standard library (GO-2026-6089/6090/6091,
+// GO-2026-5972 in net/http, crypto/tls, html/template, encoding/asn1). GOTOOLCHAIN=auto
+// downloads this everywhere (CI, Docker, local); bump it when new stdlib advisories land.
+toolchain go1.25.13
+
 require (
 	github.com/Jille/raft-grpc-leader-rpc v1.1.0
 	github.com/Jille/raft-grpc-transport v1.4.0
