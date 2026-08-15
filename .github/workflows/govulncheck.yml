@@ -24,7 +24,8 @@ jobs:
           go-version: '1.25.x'
 
       - name: Run govulncheck
-        # Force the toolchain upgrade in case setup-go pins GOTOOLCHAIN=local.
+        # go run <tool>@latest honours the go directive but not the toolchain directive,
+        # so pin the patched toolchain explicitly. Keep in sync with go.mod's toolchain.
         env:
-          GOTOOLCHAIN: auto
+          GOTOOLCHAIN: go1.25.13
         run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
