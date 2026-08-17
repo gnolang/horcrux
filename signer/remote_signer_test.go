@@ -4,11 +4,13 @@ import (
 	"context"
 	"net"
 	"testing"
+	"time"
 
 	cometcrypto "github.com/cometbft/cometbft/crypto"
 	cometcryptoed25519 "github.com/cometbft/cometbft/crypto/ed25519"
 	cometlog "github.com/cometbft/cometbft/libs/log"
 	cometp2pconn "github.com/cometbft/cometbft/p2p/conn"
+	cometproto "github.com/cometbft/cometbft/proto/tendermint/types"
 	"github.com/stretchr/testify/require"
 )
 
@@ -135,4 +137,82 @@ func TestConnAuthPrivKey(t *testing.T) {
 		require.Equal(t, connKey, a.privKey)
 		require.Equal(t, a.privKey, b.privKey)
 	})
+}
+
+// echoPrivVal is a PrivValidator stub returning a fixed signature so handler
+// tests can assert response construction without a cosigner cluster.
+type echoPrivVal struct{}
+
+func (echoPrivVal) Sign(_ context.Context, _ string, block Block) ([]byte, []byte, time.Time, error) {
+	return []byte("test-signature"), nil, block.Timestamp, nil
+}
+func (echoPrivVal) GetPubKey(context.Context, string) ([]byte, error) { return nil, nil }
+func (echoPrivVal) Stop()                                             {}
+
+// A chain node verifies the signed vote/proposal it gets back as a complete
+// message (gno.land/tm2 rejects a vote whose validator address is empty), so
+// the response must echo every request field, with only the signature and
+// timestamp filled in by the signer.
+func TestHandleSignVoteRequestEchoesVote(t *testing.T) {
+	rs := NewReconnRemoteSigner(
+		"tcp://127.0.0.1:0", cometlog.NewNopLogger(), echoPrivVal{},
+		net.Dialer{}, 1024*1024, ConnAuth{}, nil,
+	)
+
+	vote := cometproto.Vote{
+		Type:   cometproto.PrecommitType,
+		Height: 42,
+		Round:  1,
+		BlockID: cometproto.BlockID{
+			Hash:          []byte("0123456789abcdef0123456789abcdef"),
+			PartSetHeader: cometproto.PartSetHeader{Total: 3, Hash: []byte("fedcba9876543210fedcba9876543210")},
+		},
+		Timestamp:        time.Unix(1700000000, 0).UTC(),
+		ValidatorAddress: []byte("01234567890123456789"),
+		ValidatorIndex:   7,
+	}
+
+	res := rs.handleSignVoteRequest("test-chain", &vote)
+	signed := res.GetSignedVoteResponse()
+	require.NotNil(t, signed)
+	require.Nil(t, signed.Error)
+
+	require.Equal(t, vote.ValidatorAddress, signed.Vote.ValidatorAddress)
+	require.Equal(t, vote.ValidatorIndex, signed.Vote.ValidatorIndex)
+	require.Equal(t, vote.Type, signed.Vote.Type)
+	require.Equal(t, vote.Height, signed.Vote.Height)
+	require.Equal(t, vote.Round, signed.Vote.Round)
+	require.Equal(t, vote.BlockID, signed.Vote.BlockID)
+	require.Equal(t, []byte("test-signature"), signed.Vote.Signature)
+}
+
+func TestHandleSignProposalRequestEchoesProposal(t *testing.T) {
+	rs := NewReconnRemoteSigner(
+		"tcp://127.0.0.1:0", cometlog.NewNopLogger(), echoPrivVal{},
+		net.Dialer{}, 1024*1024, ConnAuth{}, nil,
+	)
+
+	proposal := cometproto.Proposal{
+		Type:     cometproto.ProposalType,
+		Height:   42,
+		Round:    1,
+		PolRound: -1,
+		BlockID: cometproto.BlockID{
+			Hash:          []byte("0123456789abcdef0123456789abcdef"),
+			PartSetHeader: cometproto.PartSetHeader{Total: 3, Hash: []byte("fedcba9876543210fedcba9876543210")},
+		},
+		Timestamp: time.Unix(1700000000, 0).UTC(),
+	}
+
+	res := rs.handleSignProposalRequest("test-chain", &proposal)
+	signed := res.GetSignedProposalResponse()
+	require.NotNil(t, signed)
+	require.Nil(t, signed.Error)
+
+	require.Equal(t, proposal.Type, signed.Proposal.Type)
+	require.Equal(t, proposal.Height, signed.Proposal.Height)
+	require.Equal(t, proposal.Round, signed.Proposal.Round)
+	require.Equal(t, proposal.PolRound, signed.Proposal.PolRound)
+	require.Equal(t, proposal.BlockID, signed.Proposal.BlockID)
+	require.Equal(t, []byte("test-signature"), signed.Proposal.Signature)
 }

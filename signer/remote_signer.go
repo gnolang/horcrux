@@ -343,6 +343,11 @@ func (rs *ReconnRemoteSigner) handleSignVoteRequest(chainID string, vote *cometp
 		return cometprotoprivval.Message{Sum: msgSum}
 	}
 
+	// Echo the full request vote with only the signer-owned fields replaced: a
+	// chain node validates the returned vote as a complete message (gno.land/tm2
+	// rejects a vote whose validator address is empty), so dropping request
+	// fields breaks strict nodes even though CometBFT only reads the signature.
+	msgSum.SignedVoteResponse.Vote = *vote
 	msgSum.SignedVoteResponse.Vote.Timestamp = timestamp
 	msgSum.SignedVoteResponse.Vote.Signature = sig
 	msgSum.SignedVoteResponse.Vote.ExtensionSignature = voteExtSig
@@ -381,6 +386,9 @@ func (rs *ReconnRemoteSigner) handleSignProposalRequest(
 		return cometprotoprivval.Message{Sum: msgSum}
 	}
 
+	// Same echo contract as the vote response: return the request proposal with
+	// only the signature and timestamp filled in.
+	msgSum.SignedProposalResponse.Proposal = *proposal
 	msgSum.SignedProposalResponse.Proposal.Timestamp = timestamp
 	msgSum.SignedProposalResponse.Proposal.Signature = signature
 	return cometprotoprivval.Message{Sum: msgSum}
