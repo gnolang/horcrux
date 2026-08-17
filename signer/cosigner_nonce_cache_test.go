@@ -243,8 +243,11 @@ func TestNonceCacheExpiration(t *testing.T) {
 
 	cancel()
 
-	// the cache should be 100 (loadN) as the second set should not have expired.
-	require.LessOrEqual(t, nonceCache.cache.Size(), loadN)
+	// The surviving second set (loadN) should still be cached; the reconcile loop,
+	// running as leader, may also have topped the cache up toward its demand target,
+	// so the size is bounded by loadN plus that target rather than loadN exactly.
+	maxCached := loadN + nonceCache.target(nonceCache.movingAverage.average())
+	require.LessOrEqual(t, nonceCache.cache.Size(), maxCached)
 }
 
 func TestNonceCachePrune(t *testing.T) {
