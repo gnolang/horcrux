@@ -204,7 +204,10 @@ func TestNonceCacheExpiration(t *testing.T) {
 	nonceCache := NewCosignerNonceCache(
 		cometlog.NewTMLogger(cometlog.NewSyncWriter(os.Stdout)),
 		cosigners,
-		&MockLeader{id: 1, leader: &ThresholdValidator{myCosigner: lcs[0]}},
+		// Non-leader: reconcile only prunes expired nonces (what this test exercises)
+		// and never demand-loads, so the cache is not topped up past the loaded sets.
+		// Demand-based loading is covered by TestNonceCacheDemand.
+		&MockLeader{id: 1},
 		getNoncesInterval,
 		getNoncesTimeout,
 		noncesExpiration,
@@ -243,11 +246,9 @@ func TestNonceCacheExpiration(t *testing.T) {
 
 	cancel()
 
-	// The surviving second set (loadN) should still be cached; the reconcile loop,
-	// running as leader, may also have topped the cache up toward its demand target,
-	// so the size is bounded by loadN plus that target rather than loadN exactly.
-	maxCached := loadN + nonceCache.target(nonceCache.movingAverage.average())
-	require.LessOrEqual(t, nonceCache.cache.Size(), maxCached)
+	// Only the first set expired and was pruned, so the surviving second set (loadN)
+	// is all that remains.
+	require.LessOrEqual(t, nonceCache.cache.Size(), loadN)
 }
 
 func TestNonceCachePrune(t *testing.T) {
