@@ -55,6 +55,11 @@ func startChainSingleNodeAndHorcruxThreshold(
 	threshold uint8, // key shard threshold, and therefore how many horcrux signers must participate to sign a block
 	totalSentries int, // number of sentry nodes for the single horcrux validator
 	sentriesPerSigner int, // how many sentries should each horcrux signer connect to (min: 1, max: totalSentries)
+	// modifyGenesis optionally overrides the default strict-uptime slashing genesis.
+	// Tests that intentionally induce validator downtime (e.g. stopping signers) pass
+	// a lenient uptime window so the transient misses expected during signer outages
+	// and raft re-election do not jail the validator.
+	modifyGenesis ...func(ibc.ChainConfig, []byte) ([]byte, error),
 ) (*chainWrapper, crypto.PubKey) {
 	client, network := interchaintest.DockerSetup(t)
 	logger := zaptest.NewLogger(t)
@@ -62,11 +67,16 @@ func startChainSingleNodeAndHorcruxThreshold(
 	var chain *cosmos.CosmosChain
 	var pubKey crypto.PubKey
 
+	genesisModifier := modifyGenesisStrictUptime
+	if len(modifyGenesis) > 0 {
+		genesisModifier = modifyGenesis[0]
+	}
+
 	cw := &chainWrapper{
 		chain:           chain,
 		totalValidators: totalValidators,
 		totalSentries:   totalSentries - 1,
-		modifyGenesis:   modifyGenesisStrictUptime,
+		modifyGenesis:   genesisModifier,
 		preGenesis:      preGenesisSingleNodeAndHorcruxThreshold(ctx, logger, client, network, totalSigners, threshold, sentriesPerSigner, &pubKey),
 	}
 
@@ -84,7 +94,8 @@ func preGenesisSingleNodeAndHorcruxThreshold(
 	totalSigners int, // total number of signers for the single horcrux validator
 	threshold uint8, // key shard threshold, and therefore how many horcrux signers must participate to sign a block
 	sentriesPerSigner int, // how many sentries should each horcrux signer connect to (min: 1, max: totalSentries)
-	pubKey *crypto.PubKey) func(*chainWrapper) func(ibc.ChainConfig) error {
+	pubKey *crypto.PubKey,
+) func(*chainWrapper) func(ibc.ChainConfig) error {
 	return func(cw *chainWrapper) func(ibc.ChainConfig) error {
 		return func(cc ibc.ChainConfig) error {
 			horcruxValidator := cw.chain.Validators[0]
@@ -124,7 +135,8 @@ func preGenesisAllHorcruxThreshold(
 	sentriesPerValidator int, // how many sentries for each horcrux validator (min: sentriesPerSigner, max: totalSentries)
 	sentriesPerSigner int, // how many sentries should each horcrux signer connect to (min: 1, max: sentriesPerValidator)
 
-	pubKeys []crypto.PubKey) func(*chainWrapper) func(ibc.ChainConfig) error {
+	pubKeys []crypto.PubKey,
+) func(*chainWrapper) func(ibc.ChainConfig) error {
 	return func(cw *chainWrapper) func(ibc.ChainConfig) error {
 		return func(cc ibc.ChainConfig) error {
 			fnsPerVal := sentriesPerValidator - 1 // minus 1 for the validator itself
@@ -146,7 +158,6 @@ func preGenesisAllHorcruxThreshold(
 						sentries,
 						sentriesPerSigner,
 					)
-
 					if err != nil {
 						return err
 					}
@@ -366,6 +377,7 @@ func getSentriesForCosignerConnection(sentries cosmos.ChainNodes, numSigners int
 	}
 	return peers
 }
+
 func getCosignerMetrics(ctx context.Context, cosigners cosmos.SidecarProcesses) {
 	for _, s := range cosigners {
 		s := s
@@ -390,15 +402,12 @@ func getCosignerMetrics(ctx context.Context, cosigners cosmos.SidecarProcesses) 
 }
 
 func getMetrics(ctx context.Context, cosigner *cosmos.SidecarProcess) (map[string]*dto.MetricFamily, error) {
-
 	debugAddr, err := cosigner.GetHostPorts(ctx, debugPortDocker)
 	if err != nil {
 		return nil, err
 	}
 	req, err := http.NewRequestWithContext(ctx, "GET", "http://"+debugAddr[0]+"/metrics", nil)
-
 	if err != nil {
-
 		return nil, err
 	}
 	resp, err := http.DefaultClient.Do(req)
@@ -410,7 +419,6 @@ func getMetrics(ctx context.Context, cosigner *cosmos.SidecarProcess) (map[strin
 	var parser expfmt.TextParser
 	mf, err := parser.TextToMetricFamilies(resp.Body)
 	if err != nil {
-
 		return nil, err
 	}
 

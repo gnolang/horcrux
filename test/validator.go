@@ -126,6 +126,14 @@ func modifyGenesisStrictUptime(cc ibc.ChainConfig, b []byte) ([]byte, error) {
 	return modifyGenesisSlashingUptime(10, 0.8)(cc, b)
 }
 
+// modifyGenesisLenientUptime modifies the genesis file to have a lenient uptime slashing window.
+// 10 block window, 10% signed blocks required, so the validator is only jailed after ~10 consecutive
+// missed blocks. Used by the downed-signer resilience tests, which intentionally stop signers: the few
+// blocks missed while raft re-elects a leader are expected and must not jail the validator.
+func modifyGenesisLenientUptime(cc ibc.ChainConfig, b []byte) ([]byte, error) {
+	return modifyGenesisSlashingUptime(10, 0.1)(cc, b)
+}
+
 // modifyGenesisSlashingUptime modifies the genesis slashing period parameters.
 func modifyGenesisSlashingUptime(
 	signedBlocksWindow uint64,
@@ -237,14 +245,23 @@ func getValSigningInfo(tn *cosmos.ChainNode, address cometbytes.HexBytes) (*slas
 	return &res.ValSigningInfo, nil
 }
 
-// requireHealthyValidator asserts that the given validator is not tombstoned, not jailed, and has not missed any blocks in the slashing window.
+// requireHealthyValidator asserts that the given validator is not tombstoned, not jailed, and has
+// caught up on missed blocks in the slashing window. It polls rather than asserting once: after a
+// signer outage the validator needs a few blocks of steady signing for its missed-block counter to
+// age out of the window, and under load that can take longer than a single WaitForBlocks. A jailed
+// or tombstoned validator never recovers, so those simply fail once the poll times out.
 func requireHealthyValidator(t *testing.T, referenceNode *cosmos.ChainNode, validatorAddress cometbytes.HexBytes) {
-	signingInfo, err := getValSigningInfo(referenceNode, validatorAddress)
-	require.NoError(t, err)
-
-	require.False(t, signingInfo.Tombstoned)
-	require.Equal(t, time.Unix(0, 0).UTC(), signingInfo.JailedUntil)
-	require.LessOrEqual(t, signingInfo.MissedBlocksCounter, int64(1))
+	require.Eventuallyf(t, func() bool {
+		signingInfo, err := getValSigningInfo(referenceNode, validatorAddress)
+		if err != nil {
+			return false
+		}
+		return !signingInfo.Tombstoned &&
+			signingInfo.JailedUntil.Equal(time.Unix(0, 0).UTC()) &&
+			signingInfo.MissedBlocksCounter <= 1
+	}, 60*time.Second, 2*time.Second,
+		"validator %X did not become healthy (tombstoned, jailed, or still catching up on missed blocks)",
+		validatorAddress)
 }
 
 // transferLeadership elects a new raft leader.
