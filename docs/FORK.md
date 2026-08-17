@@ -39,6 +39,7 @@ Severity reflects impact on a threshold-mode validator (key compromise > equivoc
 | 9   | Opt-in mutual TLS for the cosigner cluster transport                | **Medium**   | Hardening (new)                                    | n/a (closes confidentiality/DoS/MITM)                         |
 | 10  | Secrets-at-rest hygiene (dir perms, `.gitignore`)                   | **Low**      | Hardening                                          | Local users                                                   |
 | —   | Optional persistent priv-validator connection auth (feature)        | n/a          | Feature                                            | n/a                                                           |
+| —   | Opt-in leader-only priv-validator connections (tm2/gno.land compat) | n/a          | Feature                                            | n/a                                                           |
 
 Everything is **opt-in and backward-compatible**: with no new config, behavior is
 identical to upstream v3.3.2.
@@ -173,3 +174,16 @@ Optional `connKeyFile` gives the cosigner a stable ed25519 identity a chain node
 can authorize, and per-node `connPubKey` lets the cosigner pin the node it
 connects to. Both off by default. `horcrux create-conn-key` generates the key. See
 [`authentication.md`](authentication.md).
+
+### Feature: leader-only priv-validator connections (tm2/gno.land compat)
+
+By default every cosigner dials every configured chain node, which only works when
+the node's privval listener tolerates the resulting connection contention (CometBFT
+does; tm2/gno.land holds a single signer slot and churns — no signature is ever
+delivered). Optional `thresholdMode.leaderOnlyChainNodeConnections: true` makes
+only the current raft leader hold the priv-validator connections: followers park
+without dialing and a leader that loses its raft leadership releases the connection
+for its successor. Off by default — the sharded-sentries topology (one cosigner per
+sentry) requires every cosigner to dial its own sentries regardless of leadership.
+See [`HANDOFF-tm2-single-connection.md`](HANDOFF-tm2-single-connection.md) for the
+root-cause analysis.

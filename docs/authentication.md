@@ -124,18 +124,18 @@ key is listed on the matching `cosigners` entry across the cluster (the allowlis
 
     ```yaml
     thresholdMode:
-      threshold: 2
-      clusterKeyFile: cluster_key.json
-      cosigners:
-        - shardID: 1
-          p2pAddr: tcp://horcrux-1:2222
-          tlsPubKey: 51d0d694...   # cosigner 1's cluster public key
-        - shardID: 2
-          p2pAddr: tcp://horcrux-2:2222
-          tlsPubKey: a1b2c3d4...   # cosigner 2's cluster public key
-        - shardID: 3
-          p2pAddr: tcp://horcrux-3:2222
-          tlsPubKey: 9e8f7a6b...   # cosigner 3's cluster public key
+        threshold: 2
+        clusterKeyFile: cluster_key.json
+        cosigners:
+            - shardID: 1
+              p2pAddr: tcp://horcrux-1:2222
+              tlsPubKey: 51d0d694... # cosigner 1's cluster public key
+            - shardID: 2
+              p2pAddr: tcp://horcrux-2:2222
+              tlsPubKey: a1b2c3d4... # cosigner 2's cluster public key
+            - shardID: 3
+              p2pAddr: tcp://horcrux-3:2222
+              tlsPubKey: 9e8f7a6b... # cosigner 3's cluster public key
     ```
 
     `clusterKeyFile` resolves like other key files (relative to `keyDir`, else the
@@ -151,3 +151,38 @@ key is listed on the matching `cosigners` entry across the cluster (the allowlis
 Authentication uses self-signed certificates pinned by public key — there is no
 certificate authority to run, mirroring the allowlist model already used for
 cosigner-to-cosigner nonce encryption.
+
+## Leader-only chain node connections
+
+By default every cosigner opens its own persistent priv-validator connection to
+each configured chain node. Whether that is correct depends on your topology:
+
+- **Sharded sentries** (each cosigner dials its _own_ sentries — `sentriesPerSigner`
+  with distinct nodes per cosigner): keep the default. Every sentry expects a
+  connection from its assigned cosigner, and there is no single-slot contention.
+- **Shared node** (multiple cosigners point at the _same_ node's priv-validator
+  port — a single sentry, or a gno.land / tm2 validator): the node's listener holds
+  exactly one signer connection, so the cosigners fight over that one slot. On
+  CometBFT this "works" but wastes connections and lands sign requests on followers
+  that must proxy to the leader; on tm2/gno.land the connection churns ~1×/second
+  and the validator signs **nothing**.
+
+For the shared-node case, set:
+
+```yaml
+thresholdMode:
+    leaderOnlyChainNodeConnections: true
+```
+
+Only the current raft leader then holds the connection: followers park without
+dialing, and a leader that loses leadership releases its connection so the new
+leader can take the slot. The chain node always sees exactly one stable signer
+connection — the model tmkms uses and the one tm2/gno.land requires. On a
+leadership change there is a brief handoff (old leader drops, new leader dials and
+the node re-accepts) — a block or two at worst, versus permanent churn.
+
+Leave it off (the default) for sharded sentries: leader-only dialing would leave
+follower sentries with no signer connection, which CometBFT nodes do not survive
+at startup. Double-sign protection is unaffected either way — it lives at the
+threshold validator's HRS high-watermark, independent of which cosigner holds the
+wire.
