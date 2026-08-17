@@ -60,7 +60,7 @@ func TestEstablishConnectionNodeAuth(t *testing.T) {
 
 	t.Run("unauthenticated node connects", func(t *testing.T) {
 		address, _ := nodePrivvalListener(t, nodeKey)
-		rs := NewReconnRemoteSigner(address, cometlog.NewNopLogger(), nil, net.Dialer{}, 1024, ConnAuth{})
+		rs := NewReconnRemoteSigner(address, cometlog.NewNopLogger(), nil, net.Dialer{}, 1024, ConnAuth{}, nil)
 
 		conn, err := rs.establishConnection(context.Background())
 		require.NoError(t, err)
@@ -71,7 +71,7 @@ func TestEstablishConnectionNodeAuth(t *testing.T) {
 		address, _ := nodePrivvalListener(t, nodeKey)
 		rs := NewReconnRemoteSigner(address, cometlog.NewNopLogger(), nil, net.Dialer{}, 1024, ConnAuth{
 			NodePubKey: nodeKey.PubKey().(cometcryptoed25519.PubKey),
-		})
+		}, nil)
 
 		conn, err := rs.establishConnection(context.Background())
 		require.NoError(t, err)
@@ -83,7 +83,7 @@ func TestEstablishConnectionNodeAuth(t *testing.T) {
 		impostor := cometcryptoed25519.GenPrivKey().PubKey().(cometcryptoed25519.PubKey)
 		rs := NewReconnRemoteSigner(address, cometlog.NewNopLogger(), nil, net.Dialer{}, 1024, ConnAuth{
 			NodePubKey: impostor,
-		})
+		}, nil)
 
 		conn, err := rs.establishConnection(context.Background())
 		require.ErrorIs(t, err, ErrConnPubKeyMismatch)
@@ -95,7 +95,7 @@ func TestEstablishConnectionNodeAuth(t *testing.T) {
 		connKey := cometcryptoed25519.GenPrivKey()
 		rs := NewReconnRemoteSigner(address, cometlog.NewNopLogger(), nil, net.Dialer{}, 1024, ConnAuth{
 			PrivKey: connKey,
-		})
+		}, nil)
 
 		conn, err := rs.establishConnection(context.Background())
 		require.NoError(t, err)
@@ -112,7 +112,7 @@ func TestStartRemoteSigners(t *testing.T) {
 			{PrivValAddr: "tcp://127.0.0.1:2", ConnPubKeyHex: "beefbeef"},
 		}
 
-		services, err := StartRemoteSigners(nil, cometlog.NewNopLogger(), nil, nodes, 1024, nil)
+		services, err := StartRemoteSigners(nil, cometlog.NewNopLogger(), nil, nodes, 1024, nil, nil)
 		require.Error(t, err)
 		require.Empty(t, services)
 	})
@@ -120,8 +120,8 @@ func TestStartRemoteSigners(t *testing.T) {
 
 func TestConnAuthPrivKey(t *testing.T) {
 	t.Run("no key generates a distinct identity per signer", func(t *testing.T) {
-		a := NewReconnRemoteSigner("tcp://127.0.0.1:1", cometlog.NewNopLogger(), nil, net.Dialer{}, 1024, ConnAuth{})
-		b := NewReconnRemoteSigner("tcp://127.0.0.1:2", cometlog.NewNopLogger(), nil, net.Dialer{}, 1024, ConnAuth{})
+		a := NewReconnRemoteSigner("tcp://127.0.0.1:1", cometlog.NewNopLogger(), nil, net.Dialer{}, 1024, ConnAuth{}, nil)
+		b := NewReconnRemoteSigner("tcp://127.0.0.1:2", cometlog.NewNopLogger(), nil, net.Dialer{}, 1024, ConnAuth{}, nil)
 
 		require.NotEqual(t, a.privKey, b.privKey)
 	})
@@ -129,8 +129,8 @@ func TestConnAuthPrivKey(t *testing.T) {
 	t.Run("a persistent key is shared by every signer", func(t *testing.T) {
 		connKey := cometcryptoed25519.GenPrivKey()
 		auth := ConnAuth{PrivKey: connKey}
-		a := NewReconnRemoteSigner("tcp://127.0.0.1:1", cometlog.NewNopLogger(), nil, net.Dialer{}, 1024, auth)
-		b := NewReconnRemoteSigner("tcp://127.0.0.1:2", cometlog.NewNopLogger(), nil, net.Dialer{}, 1024, auth)
+		a := NewReconnRemoteSigner("tcp://127.0.0.1:1", cometlog.NewNopLogger(), nil, net.Dialer{}, 1024, auth, nil)
+		b := NewReconnRemoteSigner("tcp://127.0.0.1:2", cometlog.NewNopLogger(), nil, net.Dialer{}, 1024, auth, nil)
 
 		require.Equal(t, connKey, a.privKey)
 		require.Equal(t, a.privKey, b.privKey)

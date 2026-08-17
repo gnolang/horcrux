@@ -2,6 +2,7 @@ package signer
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"time"
@@ -17,7 +18,15 @@ import (
 	cometproto "github.com/cometbft/cometbft/proto/tendermint/types"
 )
 
-const connRetrySec = 2
+const (
+	connRetrySec = 2
+
+	// leaderCheckInterval is how often a leadership-gated signer re-evaluates
+	// raft leadership, both while parked as a follower and while holding a
+	// connection as the leader. It must be well under the chain node's
+	// ~3-second connection-accept window so a new leader dials in time.
+	leaderCheckInterval = 250 * time.Millisecond
+)
 
 // PrivValidator is a wrapper for tendermint PrivValidator,
 // with additional Stop method for safe shutdown.
@@ -42,12 +51,19 @@ type ReconnRemoteSigner struct {
 	dialer net.Dialer
 
 	maxReadSize int
+
+	// isLeader, when non-nil, gates the connection on cluster leadership: the
+	// signer only dials while it reports true and releases the connection when
+	// it turns false, so a chain node holding a single signer slot always talks
+	// to the current raft leader. Nil means always connect.
+	isLeader func() bool
 }
 
 // NewReconnRemoteSigner return a ReconnRemoteSigner that will dial using the given
 // dialer and respond to any signature requests over the connection
 // using the given privVal. connAuth optionally authenticates either end of that
-// connection.
+// connection. isLeader, when non-nil, restricts the connection to the current
+// cluster leader (see the field doc).
 //
 // If the connection is broken, the ReconnRemoteSigner will attempt to reconnect.
 func NewReconnRemoteSigner(
@@ -57,6 +73,7 @@ func NewReconnRemoteSigner(
 	dialer net.Dialer,
 	maxReadSize int,
 	connAuth ConnAuth,
+	isLeader func() bool,
 ) *ReconnRemoteSigner {
 	privKey := connAuth.PrivKey
 	if privKey == nil {
@@ -70,6 +87,7 @@ func NewReconnRemoteSigner(
 		privKey:     privKey,
 		nodePubKey:  connAuth.NodePubKey,
 		maxReadSize: maxReadSize,
+		isLeader:    isLeader,
 	}
 
 	rs.BaseService = *cometservice.NewBaseService(logger, "RemoteSigner", rs)
@@ -114,9 +132,28 @@ func (rs *ReconnRemoteSigner) establishConnection(ctx context.Context) (net.Conn
 // main loop for ReconnRemoteSigner
 func (rs *ReconnRemoteSigner) loop(ctx context.Context) {
 	var conn net.Conn
+	// watchStop stops the leadership watcher tied to the current connection.
+	// Non-nil exactly while a watcher is running.
+	var watchStop chan struct{}
+
+	dropConn := func() {
+		rs.closeConn(conn)
+		conn = nil
+		if watchStop != nil {
+			close(watchStop)
+			watchStop = nil
+		}
+	}
+
 	for {
 		if !rs.IsRunning() {
-			rs.closeConn(conn)
+			dropConn()
+			return
+		}
+
+		// A leadership-gated follower parks here without dialing, so the chain
+		// node's single signer slot stays free for the current leader.
+		if conn == nil && !rs.waitForLeadership(ctx) {
 			return
 		}
 
@@ -152,8 +189,13 @@ func (rs *ReconnRemoteSigner) loop(ctx context.Context) {
 
 		// since dialing can take time, we check running again
 		if !rs.IsRunning() {
-			rs.closeConn(conn)
+			dropConn()
 			return
+		}
+
+		if rs.isLeader != nil && watchStop == nil {
+			watchStop = make(chan struct{})
+			go rs.releaseConnOnLeadershipLoss(conn, watchStop)
 		}
 
 		req, err := ReadMsg(conn, rs.maxReadSize)
@@ -163,8 +205,7 @@ func (rs *ReconnRemoteSigner) loop(ctx context.Context) {
 				"address", rs.address,
 				"err", err,
 			)
-			rs.closeConn(conn)
-			conn = nil
+			dropConn()
 			continue
 		}
 
@@ -173,8 +214,7 @@ func (rs *ReconnRemoteSigner) loop(ctx context.Context) {
 		// recover and drop the connection, letting the node reconnect.
 		res, panicked := rs.handleRequestSafely(req)
 		if panicked {
-			rs.closeConn(conn)
-			conn = nil
+			dropConn()
 			continue
 		}
 
@@ -185,8 +225,54 @@ func (rs *ReconnRemoteSigner) loop(ctx context.Context) {
 				"address", rs.address,
 				"err", err,
 			)
-			rs.closeConn(conn)
-			conn = nil
+			dropConn()
+		}
+	}
+}
+
+// waitForLeadership blocks until this cosigner leads the signer cluster,
+// returning false when the signer stops (or ctx ends) first. Signers without a
+// leadership gate return immediately.
+func (rs *ReconnRemoteSigner) waitForLeadership(ctx context.Context) bool {
+	if rs.isLeader == nil || rs.isLeader() {
+		return true
+	}
+	rs.Logger.Info("Not the cluster leader, deferring connection to chain node", "address", rs.address)
+	ticker := time.NewTicker(leaderCheckInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-ticker.C:
+			if !rs.IsRunning() {
+				return false
+			}
+			if rs.isLeader() {
+				rs.Logger.Info("Elected cluster leader, connecting to chain node", "address", rs.address)
+				return true
+			}
+		}
+	}
+}
+
+// releaseConnOnLeadershipLoss closes conn when this cosigner loses cluster
+// leadership, unblocking the request loop (which is typically parked in
+// ReadMsg) so the chain node's single signer slot frees up for the new leader.
+// stop ends the watch when the request loop tears the connection down itself.
+func (rs *ReconnRemoteSigner) releaseConnOnLeadershipLoss(conn net.Conn, stop <-chan struct{}) {
+	ticker := time.NewTicker(leaderCheckInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-ticker.C:
+			if !rs.isLeader() {
+				rs.Logger.Info("Lost cluster leadership, releasing connection to chain node", "address", rs.address)
+				rs.closeConn(conn)
+				return
+			}
 		}
 	}
 }
@@ -362,7 +448,10 @@ func getRemoteSignerError(err error) *cometprotoprivval.RemoteSignerError {
 
 // StartRemoteSigners starts a signer for each chain node. connKey is the signer's
 // persistent connection identity, shared by every node connection; a nil connKey
-// presents a fresh identity per node connection.
+// presents a fresh identity per node connection. isLeader, when non-nil, gates
+// every node connection on cluster leadership so only the current raft leader
+// dials — required for chain nodes whose privval listener holds a single signer
+// connection (tm2/gno.land). Nil preserves the always-dial behavior.
 func StartRemoteSigners(
 	services []cometservice.Service,
 	logger cometlog.Logger,
@@ -370,6 +459,7 @@ func StartRemoteSigners(
 	nodes []ChainNode,
 	maxReadSize int,
 	connKey cometcryptoed25519.PrivKey,
+	isLeader func() bool,
 ) ([]cometservice.Service, error) {
 	// Resolve every node's expected connection key up front so a malformed one
 	// cannot leave a partially started set of signers behind.
@@ -389,7 +479,7 @@ func StartRemoteSigners(
 		// A long timeout such as 30 seconds would cause the sentry to fail in loops
 		// Use a short timeout and dial often to connect within 3 second window
 		dialer := net.Dialer{Timeout: 2 * time.Second}
-		s := NewReconnRemoteSigner(node.PrivValAddr, logger, privVal, dialer, maxReadSize, auths[i])
+		s := NewReconnRemoteSigner(node.PrivValAddr, logger, privVal, dialer, maxReadSize, auths[i], isLeader)
 
 		// A pin only protects a node the operator can confirm is pinned, and a
 		// mistyped config key is otherwise indistinguishable from no pin at all.
@@ -415,7 +505,9 @@ func (rs *ReconnRemoteSigner) closeConn(conn net.Conn) {
 	if conn == nil {
 		return
 	}
-	if err := conn.Close(); err != nil {
+	// The leadership watcher and the request loop may both close the same
+	// connection; the second close is a benign net.ErrClosed.
+	if err := conn.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
 		rs.Logger.Error("Failed to close connection to chain node",
 			"address", rs.address,
 			"err", err,

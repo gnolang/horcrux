@@ -127,6 +127,25 @@ chainNodes:
 	require.Nil(t, unpinned)
 }
 
+func TestConfigYamlLeaderOnlyChainNodeConnections(t *testing.T) {
+	raw := `signMode: threshold
+thresholdMode:
+  threshold: 2
+  leaderOnlyChainNodeConnections: true
+chainNodes:
+- privValAddr: tcp://10.168.0.1:1234
+`
+
+	var c signer.Config
+	require.NoError(t, yaml.Unmarshal([]byte(raw), &c))
+	require.True(t, c.ThresholdModeConfig.LeaderOnlyChainNodeConnections)
+
+	// The flag defaults to false when absent.
+	var d signer.Config
+	require.NoError(t, yaml.Unmarshal([]byte("thresholdMode:\n  threshold: 2\n"), &d))
+	require.False(t, d.ThresholdModeConfig.LeaderOnlyChainNodeConnections)
+}
+
 func TestClusterPeerPubKeys(t *testing.T) {
 	k1 := cometcryptoed25519.GenPrivKey().PubKey()
 	k2 := cometcryptoed25519.GenPrivKey().PubKey()

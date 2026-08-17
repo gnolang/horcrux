@@ -280,6 +280,13 @@ type ThresholdModeConfig struct {
 	ClusterKeyFile string `yaml:"clusterKeyFile,omitempty"`
 	GRPCTimeout    string `yaml:"grpcTimeout"`
 	RaftTimeout    string `yaml:"raftTimeout"`
+	// LeaderOnlyChainNodeConnections, when true, makes only the current raft
+	// leader hold priv-validator connections to the chain nodes; followers park
+	// until elected. Required for nodes whose privval listener holds a single
+	// signer connection (tm2/gno.land). Leave false (the default) when each
+	// cosigner dials its own distinct sentries: those sentries expect a
+	// connection from their assigned cosigner regardless of leadership.
+	LeaderOnlyChainNodeConnections bool `yaml:"leaderOnlyChainNodeConnections,omitempty"`
 }
 
 // ClusterTLSEnabled reports whether cosigner mutual TLS is configured.

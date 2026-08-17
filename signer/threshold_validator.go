@@ -265,6 +265,11 @@ func (pv *ThresholdValidator) Stop() {
 	pv.waitForSignStatesToFlushToDisk()
 }
 
+// IsLeader reports whether this cosigner currently leads the signer cluster.
+func (pv *ThresholdValidator) IsLeader() bool {
+	return pv.leader.IsLeader()
+}
+
 // waitForSignStatesToFlushToDisk waits for any sign states to finish writing to disk.
 func (pv *ThresholdValidator) waitForSignStatesToFlushToDisk() {
 	pv.pendingDiskWG.Wait()
