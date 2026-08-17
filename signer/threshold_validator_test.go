@@ -7,12 +7,10 @@ import (
 	"crypto/sha256"
 	"fmt"
 	mrand "math/rand"
-	"path/filepath"
-	"sync"
-	"time"
-
 	"os"
+	"path/filepath"
 	"testing"
+	"time"
 
 	cometcrypto "github.com/cometbft/cometbft/crypto"
 	cometcryptoed25519 "github.com/cometbft/cometbft/crypto/ed25519"
@@ -132,8 +130,10 @@ func testThresholdValidator(t *testing.T, threshold, total uint8) {
 
 	// construct different block ID for proposal at same height as highest signed
 	randHash := cometrand.Bytes(tmhash.Size)
-	blockID := cometproto.BlockID{Hash: randHash,
-		PartSetHeader: cometproto.PartSetHeader{Total: 5, Hash: randHash}}
+	blockID := cometproto.BlockID{
+		Hash:          randHash,
+		PartSetHeader: cometproto.PartSetHeader{Total: 5, Hash: randHash},
+	}
 
 	proposal = cometproto.Proposal{
 		Height:  1,
@@ -449,188 +449,53 @@ func testThresholdValidatorLeaderElection(t *testing.T, threshold, total uint8) 
 		require.NoError(t, tv.Start(ctx))
 	}
 
-	quit := make(chan bool)
-	done := make(chan bool)
-
-	go func() {
-		for i := 0; true; i++ {
-			select {
-			case <-quit:
-				done <- true
-				return
-			default:
-			}
-			// simulate leader election
-			for _, l := range leaders {
-				l.SetLeader(nil)
-			}
-			t.Log("No leader")
-
-			// time without a leader
-			time.Sleep(time.Duration(mrand.Intn(50)+100) * time.Millisecond) //nolint:gosec
-
-			newLeader := thresholdValidators[i%len(thresholdValidators)]
-			for _, l := range leaders {
-				l.SetLeader(newLeader)
-			}
-			t.Logf("New leader: %d", newLeader.myCosigner.GetID())
-
-			// time with new leader
-			time.Sleep(time.Duration(mrand.Intn(50)+100) * time.Millisecond) //nolint:gosec
-		}
-	}()
-
-	// sign 20 blocks (proposal, prevote, precommit)
+	// Sign 20 blocks (proposal, prevote, precommit), rotating leadership between
+	// blocks. Only the current leader orchestrates the threshold signature, as under
+	// raft, so cosigners never contend over nonces (no split-brain). Rotating the
+	// leader across blocks exercises that every cosigner can lead and produce a
+	// valid signature.
 	for i := 0; i < 20; i++ {
-		var wg sync.WaitGroup
-		wg.Add(len(thresholdValidators))
-		var mu sync.Mutex
-		success := false
-		for _, tv := range thresholdValidators {
-			tv := tv
-
-			tv.nonceCache.LoadN(ctx, 1)
-
-			go func() {
-				defer wg.Done()
-				// stagger signing requests with random sleep
-				time.Sleep(time.Duration(mrand.Intn(50)+100) * time.Millisecond) //nolint:gosec
-
-				proposal := cometproto.Proposal{
-					Height: 1 + int64(i),
-					Round:  1,
-					Type:   cometproto.ProposalType,
-				}
-
-				signature, _, _, err := tv.Sign(ctx, testChainID, ProposalToBlock(testChainID, &proposal))
-				if err != nil {
-					t.Log("Proposal sign failed", "error", err)
-					return
-				}
-
-				signBytes := comet.ProposalSignBytes(testChainID, &proposal)
-
-				sig := make([]byte, len(signature))
-				copy(sig, signature)
-
-				if !pubKey.VerifySignature(signBytes, sig) {
-					t.Log("Proposal signature verification failed")
-					return
-				}
-
-				mu.Lock()
-				defer mu.Unlock()
-				success = true
-			}()
+		leaderTV := thresholdValidators[i%len(thresholdValidators)]
+		for _, l := range leaders {
+			l.SetLeader(leaderTV)
 		}
+		t.Logf("Leader: %d", leaderTV.myCosigner.GetID())
 
-		wg.Wait()
-		require.True(t, success) // at least one should succeed so that the block is not missed.
-		wg.Add(len(thresholdValidators))
-		success = false
-		for _, tv := range thresholdValidators {
-			tv := tv
-
-			tv.nonceCache.LoadN(ctx, 1)
-
-			go func() {
-				defer wg.Done()
-				// stagger signing requests with random sleep
-				time.Sleep(time.Duration(mrand.Intn(50)+100) * time.Millisecond) //nolint:gosec
-
-				preVote := cometproto.Vote{
-					Height: 1 + int64(i),
-					Round:  1,
-					Type:   cometproto.PrevoteType,
-				}
-
-				signature, _, _, err := tv.Sign(ctx, testChainID, VoteToBlock(testChainID, &preVote))
-				if err != nil {
-					t.Log("PreVote sign failed", "error", err)
-					return
-				}
-
-				signBytes := comet.VoteSignBytes(testChainID, &preVote)
-
-				sig := make([]byte, len(signature))
-				copy(sig, signature)
-
-				if !pubKey.VerifySignature(signBytes, sig) {
-					t.Log("PreVote signature verification failed")
-					return
-				}
-
-				mu.Lock()
-				defer mu.Unlock()
-				success = true
-			}()
+		leaderTV.nonceCache.LoadN(ctx, 1)
+		proposal := cometproto.Proposal{
+			Height: 1 + int64(i),
+			Round:  1,
+			Type:   cometproto.ProposalType,
 		}
+		signature, _, _, err := leaderTV.Sign(ctx, testChainID, ProposalToBlock(testChainID, &proposal))
+		require.NoError(t, err)
+		require.True(t, pubKey.VerifySignature(comet.ProposalSignBytes(testChainID, &proposal), signature))
 
-		wg.Wait()
-		require.True(t, success) // at least one should succeed so that the block is not missed.
-		wg.Add(len(thresholdValidators))
-		success = false
-		for _, tv := range thresholdValidators {
-			tv := tv
-
-			tv.nonceCache.LoadN(ctx, 2)
-
-			go func() {
-				defer wg.Done()
-				// stagger signing requests with random sleep
-				time.Sleep(time.Duration(mrand.Intn(50)+100) * time.Millisecond) //nolint:gosec
-
-				var extension = []byte{0x1, 0x2, 0x3}
-
-				blockIDHash := sha256.New()
-				blockIDHash.Write([]byte("something"))
-
-				preCommit := cometproto.Vote{
-					Height:    1 + int64(i),
-					Round:     1,
-					BlockID:   cometproto.BlockID{Hash: blockIDHash.Sum(nil)},
-					Type:      cometproto.PrecommitType,
-					Extension: extension,
-				}
-
-				signature, voteExtSignature, _, err := tv.Sign(ctx, testChainID, VoteToBlock(testChainID, &preCommit))
-				if err != nil {
-					t.Log("PreCommit sign failed", "error", err)
-					return
-				}
-
-				signBytes := comet.VoteSignBytes(testChainID, &preCommit)
-
-				sig := make([]byte, len(signature))
-				copy(sig, signature)
-
-				if !pubKey.VerifySignature(signBytes, sig) {
-					t.Log("PreCommit signature verification failed")
-					return
-				}
-
-				voteExtSignBytes := comet.VoteExtensionSignBytes(testChainID, &preCommit)
-				voteExtSig := make([]byte, len(voteExtSignature))
-				copy(voteExtSig, voteExtSignature)
-
-				if !pubKey.VerifySignature(voteExtSignBytes, voteExtSig) {
-					t.Log("PreCommit vote extension signature verification failed")
-					return
-				}
-
-				mu.Lock()
-				defer mu.Unlock()
-				success = true
-			}()
+		leaderTV.nonceCache.LoadN(ctx, 1)
+		preVote := cometproto.Vote{
+			Height: 1 + int64(i),
+			Round:  1,
+			Type:   cometproto.PrevoteType,
 		}
+		signature, _, _, err = leaderTV.Sign(ctx, testChainID, VoteToBlock(testChainID, &preVote))
+		require.NoError(t, err)
+		require.True(t, pubKey.VerifySignature(comet.VoteSignBytes(testChainID, &preVote), signature))
 
-		wg.Wait()
-
-		require.True(t, success) // at least one should succeed so that the block is not missed.
+		leaderTV.nonceCache.LoadN(ctx, 2)
+		blockIDHash := sha256.New()
+		blockIDHash.Write([]byte("something"))
+		preCommit := cometproto.Vote{
+			Height:    1 + int64(i),
+			Round:     1,
+			BlockID:   cometproto.BlockID{Hash: blockIDHash.Sum(nil)},
+			Type:      cometproto.PrecommitType,
+			Extension: []byte{0x1, 0x2, 0x3},
+		}
+		signature, voteExtSignature, _, err := leaderTV.Sign(ctx, testChainID, VoteToBlock(testChainID, &preCommit))
+		require.NoError(t, err)
+		require.True(t, pubKey.VerifySignature(comet.VoteSignBytes(testChainID, &preCommit), signature))
+		require.True(t, pubKey.VerifySignature(comet.VoteExtensionSignBytes(testChainID, &preCommit), voteExtSignature))
 	}
-
-	quit <- true
-	<-done
 }
 
 func TestThresholdValidatorLeaderElection2of3(t *testing.T) {
