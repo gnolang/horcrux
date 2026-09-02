@@ -22,7 +22,7 @@ FROM busybox:1.34.1-musl AS busybox-full
 # Build final image from scratch
 FROM scratch
 
-LABEL org.opencontainers.image.source="https://github.com/aeddi/hardened-horcrux"
+LABEL org.opencontainers.image.source="https://github.com/aeddi/horcrux"
 
 WORKDIR /bin
 
