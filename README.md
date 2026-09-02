@@ -2,14 +2,31 @@
 
 Horcrux is a [multi-party-computation (MPC)](https://en.wikipedia.org/wiki/Secure_multi-party_computation) signing service for CometBFT (Formerly known as Tendermint) nodes
 
-> **Hardened fork.** This is a security-hardened fork of
+> ## Hardened, maintained fork
+>
+> This is a security-hardened fork of
 > [strangelove-ventures/horcrux](https://github.com/strangelove-ventures/horcrux)
-> (based on `v3.3.2`). It adds optional connection authentication, opt-in cosigner
-> mutual TLS, dependency/toolchain updates, and fixes for issues found in two
-> security audits. All additions are opt-in and backward-compatible. See
-> [`docs/FORK.md`](docs/FORK.md) for the full list of changes and
-> [`docs/authentication.md`](docs/authentication.md) for the authentication and
-> mutual-TLS setup.
+> (based on `v3.3.2`; upstream is archived). All changes are **opt-in and
+> backward-compatible** — with no new configuration, behavior is identical to
+> upstream `v3.3.2`.
+>
+> - **Security hardening** from two independent audits — closes a nonce-handling
+>   flaw that risked key-material exposure, a residual double-sign path, an
+>   unauthenticated cluster admin surface, and several crash-inducing input paths.
+> - **Dependency & Go toolchain updates** — `govulncheck` reachable vulnerabilities
+>   13 → 0; builds on Go 1.25.
+> - **Optional connection security** — persistent priv-validator connection
+>   authentication, and opt-in mutual TLS between cosigners.
+> - **Broader node compatibility** — opt-in leader-only priv-validator connections
+>   and a spec-compliant sign response, for stricter priv-validator implementations
+>   (e.g. gno.land / tm2).
+> - **Supply chain** — vendored the threshold-ed25519 crypto in-tree (its upstream
+>   GitLab source is archived).
+>
+> See [`docs/FORK.md`](docs/FORK.md) for the full change list and
+> [`docs/authentication.md`](docs/authentication.md) for connection-security setup.
+>
+> **Container image:** `ghcr.io/aeddi/horcrux:main`.
 
 ## Why use Horcrux?
 
