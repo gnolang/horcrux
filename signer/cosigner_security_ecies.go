@@ -92,17 +92,38 @@ func (key *CosignerECIESKey) UnmarshalJSON(data []byte) error {
 		return err
 	}
 
-	// unmarshal the public key bytes for each cosigner
+	// unmarshal the public key bytes for each cosigner, rejecting anything the
+	// fixed-width encoding cannot have produced
+	curve := secp256k1.S256()
 	key.ECIESPubs = make([]*ecies.PublicKey, len(aux.ECIESPubs))
-	for i, bytes := range aux.ECIESPubs {
+	for i, pubBz := range aux.ECIESPubs {
+		if len(pubBz) != eciesPubKeyBytes {
+			return fmt.Errorf("ecies pub key %d: got %d bytes, want %d", i+1, len(pubBz), eciesPubKeyBytes)
+		}
+
+		if pubBz[0] != eciesPubKeyPrefix {
+			return fmt.Errorf("ecies pub key %d: got prefix 0x%02x, want 0x%02x",
+				i+1, pubBz[0], eciesPubKeyPrefix)
+		}
+
 		pub := &ecies.PublicKey{
-			X:      new(big.Int).SetBytes(bytes[1 : 1+eciesCoordinateBytes]),
-			Y:      new(big.Int).SetBytes(bytes[1+eciesCoordinateBytes:]),
-			Curve:  secp256k1.S256(),
+			X:      new(big.Int).SetBytes(pubBz[1 : 1+eciesCoordinateBytes]),
+			Y:      new(big.Int).SetBytes(pubBz[1+eciesCoordinateBytes:]),
+			Curve:  curve,
 			Params: ecies.ECIES_AES128_SHA256,
 		}
 
+		// a key file written before the coordinates were encoded at fixed width
+		// holds a coordinate multiplied by a power of 256, which is off the curve
+		if !curve.IsOnCurve(pub.X, pub.Y) {
+			return fmt.Errorf("ecies pub key %d is not on the secp256k1 curve", i+1)
+		}
+
 		key.ECIESPubs[i] = pub
+	}
+
+	if aux.ID < 1 || aux.ID > len(key.ECIESPubs) {
+		return fmt.Errorf("cosigner id %d out of range for %d ecies pub keys", aux.ID, len(key.ECIESPubs))
 	}
 
 	key.ECIESKey = &ecies.PrivateKey{
