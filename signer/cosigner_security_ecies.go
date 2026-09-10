@@ -30,6 +30,22 @@ type CosignerECIESPubKey struct {
 	PublicKey *ecies.PublicKey
 }
 
+const (
+	// eciesCoordinateBytes is the width of a secp256k1 field element in the
+	// CosignerECIESKey JSON encoding. Coordinates and the private scalar are
+	// zero padded on the left to this width: the decoder reads fixed windows,
+	// so a minimal-length value would be recovered as a different number.
+	eciesCoordinateBytes = 32
+
+	// eciesPubKeyBytes is the width of an uncompressed secp256k1 public key in
+	// the CosignerECIESKey JSON encoding: a 0x04 prefix followed by the X and Y
+	// coordinates.
+	eciesPubKeyBytes = 1 + 2*eciesCoordinateBytes
+
+	// eciesPubKeyPrefix marks a public key as an uncompressed point.
+	eciesPubKeyPrefix = 0x04
+)
+
 // CosignerECIESKey is an ECIES key for an m-of-n threshold signer, composed of a private key and n public keys.
 type CosignerECIESKey struct {
 	ECIESKey  *ecies.PrivateKey  `json:"eciesKey"`
@@ -40,14 +56,14 @@ type CosignerECIESKey struct {
 func (key *CosignerECIESKey) MarshalJSON() ([]byte, error) {
 	type Alias CosignerECIESKey
 
-	// marshal our private key and all public keys
-	privateBytes := key.ECIESKey.D.Bytes()
+	// marshal our private key and all public keys as fixed-width big-endian
+	privateBytes := key.ECIESKey.D.FillBytes(make([]byte, eciesCoordinateBytes))
 	pubKeysBytes := make([][]byte, len(key.ECIESPubs))
 	for i, pubKey := range key.ECIESPubs {
-		pubBz := make([]byte, 65)
-		pubBz[0] = 0x04
-		copy(pubBz[1:33], pubKey.X.Bytes())
-		copy(pubBz[33:65], pubKey.Y.Bytes())
+		pubBz := make([]byte, eciesPubKeyBytes)
+		pubBz[0] = eciesPubKeyPrefix
+		pubKey.X.FillBytes(pubBz[1 : 1+eciesCoordinateBytes])
+		pubKey.Y.FillBytes(pubBz[1+eciesCoordinateBytes:])
 		pubKeysBytes[i] = pubBz
 	}
 
@@ -76,17 +92,38 @@ func (key *CosignerECIESKey) UnmarshalJSON(data []byte) error {
 		return err
 	}
 
-	// unmarshal the public key bytes for each cosigner
+	// unmarshal the public key bytes for each cosigner, rejecting anything the
+	// fixed-width encoding cannot have produced
+	curve := secp256k1.S256()
 	key.ECIESPubs = make([]*ecies.PublicKey, len(aux.ECIESPubs))
-	for i, bytes := range aux.ECIESPubs {
+	for i, pubBz := range aux.ECIESPubs {
+		if len(pubBz) != eciesPubKeyBytes {
+			return fmt.Errorf("ecies pub key %d: got %d bytes, want %d", i+1, len(pubBz), eciesPubKeyBytes)
+		}
+
+		if pubBz[0] != eciesPubKeyPrefix {
+			return fmt.Errorf("ecies pub key %d: got prefix 0x%02x, want 0x%02x",
+				i+1, pubBz[0], eciesPubKeyPrefix)
+		}
+
 		pub := &ecies.PublicKey{
-			X:      new(big.Int).SetBytes(bytes[1:33]),
-			Y:      new(big.Int).SetBytes(bytes[33:]),
-			Curve:  secp256k1.S256(),
+			X:      new(big.Int).SetBytes(pubBz[1 : 1+eciesCoordinateBytes]),
+			Y:      new(big.Int).SetBytes(pubBz[1+eciesCoordinateBytes:]),
+			Curve:  curve,
 			Params: ecies.ECIES_AES128_SHA256,
 		}
 
+		// a key file written before the coordinates were encoded at fixed width
+		// holds a coordinate multiplied by a power of 256, which is off the curve
+		if !curve.IsOnCurve(pub.X, pub.Y) {
+			return fmt.Errorf("ecies pub key %d is not on the secp256k1 curve", i+1)
+		}
+
 		key.ECIESPubs[i] = pub
+	}
+
+	if aux.ID < 1 || aux.ID > len(key.ECIESPubs) {
+		return fmt.Errorf("cosigner id %d out of range for %d ecies pub keys", aux.ID, len(key.ECIESPubs))
 	}
 
 	key.ECIESKey = &ecies.PrivateKey{
@@ -172,7 +209,6 @@ func (c *CosignerSecurityECIES) EncryptAndSign(id int, noncePub []byte, nonceSha
 	// cosigners can verify the signature to confirm sender validity
 
 	jsonBytes, err := cometjson.Marshal(nonce)
-
 	if err != nil {
 		return nonce, err
 	}
