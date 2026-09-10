@@ -16,12 +16,13 @@ RUN GOOS=linux GOARCH=$TARGETARCH CGO_ENABLED=1 LDFLAGS='-linkmode external -ext
 
 RUN if [ -d "/go/bin/linux_${TARGETARCH}" ]; then mv /go/bin/linux_${TARGETARCH}/* /go/bin/; fi
 
-# Use minimal busybox from infra-toolkit image for final scratch image
-FROM ghcr.io/strangelove-ventures/infra-toolkit:v0.0.6 AS busybox-min
+# Static busybox for the final scratch image: one multi-call binary that the
+# hard links below point at. Pinned by digest because it ships in the image.
+FROM busybox:1.34.1-musl@sha256:8d80daaf06e357574a3891b89e4f81d031768a918c4e72e5fbb99fa9d6813eac AS busybox-min
 RUN addgroup --gid 2345 -S horcrux && adduser --uid 2345 -S horcrux -G horcrux
 
 # Use ln and rm from full featured busybox for assembling final image
-FROM busybox:1.34.1-musl AS busybox-full
+FROM busybox:1.34.1-musl@sha256:8d80daaf06e357574a3891b89e4f81d031768a918c4e72e5fbb99fa9d6813eac AS busybox-full
 
 # Build final image from scratch
 FROM scratch
@@ -33,8 +34,10 @@ WORKDIR /bin
 # Install ln (for making hard links) and rm (for cleanup) from full busybox image (will be deleted, only needed for image assembly)
 COPY --from=busybox-full /bin/ln /bin/rm ./
 
-# Install minimal busybox image as shell binary (will create hardlinks for the rest of the binaries to this data)
-COPY --from=busybox-min /busybox/busybox /bin/sh
+# Install busybox as the shell binary. The hard links below are the only applet
+# names on PATH; the multi-call binary still runs any applet when invoked with a
+# spoofed argv[0], so the container is hardened at the runtime, not by this image.
+COPY --from=busybox-min /bin/busybox /bin/sh
 
 # Add hard links for read-only utils, then remove ln and rm
 # Will then only have one copy of the busybox minimal binary file with all utils pointing to the same underlying inode
@@ -54,7 +57,7 @@ RUN ln sh pwd && \
 COPY --from=build-env /go/bin/horcrux /bin
 
 # Install trusted CA certificates
-COPY --from=busybox-min /etc/ssl/cert.pem /etc/ssl/cert.pem
+COPY --from=build-env /etc/ssl/certs/ca-certificates.crt /etc/ssl/cert.pem
 
 # Install horcrux user
 COPY --from=busybox-min /etc/passwd /etc/passwd
