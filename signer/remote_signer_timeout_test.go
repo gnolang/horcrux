@@ -27,15 +27,35 @@ func (blockingPrivVal) Sign(ctx context.Context, _ string, block Block) ([]byte,
 func (blockingPrivVal) GetPubKey(context.Context, string) ([]byte, error) { return nil, nil }
 func (blockingPrivVal) Stop()                                             {}
 
-// refusingPrivVal is a PrivValidator whose Sign fails immediately, modeling a
-// genuine signer refusal such as a double-sign gate rejection.
+// refusingPrivVal is a PrivValidator whose Sign fails with a slashing-protection
+// refusal, modeling a double-sign gate rejection the node must never retry.
 type refusingPrivVal struct{}
 
 func (refusingPrivVal) Sign(_ context.Context, _ string, block Block) ([]byte, []byte, time.Time, error) {
-	return nil, nil, block.Timestamp, errors.New("sign refused by test validator")
+	return nil, nil, block.Timestamp, &BeyondBlockError{msg: "sign refused by test validator"}
 }
 func (refusingPrivVal) GetPubKey(context.Context, string) ([]byte, error) { return nil, nil }
 func (refusingPrivVal) Stop()                                             {}
+
+// failingPrivVal is a PrivValidator whose Sign fails with a transient cluster
+// error (a failed combine, missing cosigners), which the node should retry.
+type failingPrivVal struct{}
+
+func (failingPrivVal) Sign(_ context.Context, _ string, block Block) ([]byte, []byte, time.Time, error) {
+	return nil, nil, block.Timestamp, errors.New("combined signature is not valid")
+}
+func (failingPrivVal) GetPubKey(context.Context, string) ([]byte, error) { return nil, nil }
+func (failingPrivVal) Stop()                                             {}
+
+// panickingPrivVal is a PrivValidator whose Sign panics, modeling an unexpected
+// defect in the sign path (an unknown sign step, a corrupted sign state).
+type panickingPrivVal struct{}
+
+func (panickingPrivVal) Sign(_ context.Context, _ string, _ Block) ([]byte, []byte, time.Time, error) {
+	panic("test panic in sign path")
+}
+func (panickingPrivVal) GetPubKey(context.Context, string) ([]byte, error) { return nil, nil }
+func (panickingPrivVal) Stop()                                             {}
 
 // signHandlerCases drives both sign handlers through the same scenario: the
 // vote and proposal paths must classify outcomes identically.
@@ -101,9 +121,43 @@ func TestSignHandlerTimeoutDropsConnection(t *testing.T) {
 	}
 }
 
-// A genuine signer refusal (the sign path itself errors, e.g. a double-sign
-// gate) must still be answered with a RemoteSignerError and must not drop the
-// connection: the node is correct to treat it as terminal.
+// A transient sign failure (failed combine, missing cosigners, exceeded
+// attempts) must drop the connection like a timeout does: answering makes the
+// node treat a recoverable cluster hiccup as a terminal refusal.
+func TestSignHandlerTransientErrorDropsConnection(t *testing.T) {
+	for _, tc := range signHandlerCases {
+		t.Run(tc.name, func(t *testing.T) {
+			rs := NewReconnRemoteSigner(
+				"tcp://127.0.0.1:0", cometlog.NewNopLogger(), failingPrivVal{},
+				net.Dialer{}, 1024*1024, ConnAuth{}, nil,
+			)
+
+			_, drop := tc.call(rs, context.Background())
+			require.True(t, drop,
+				"a transient sign failure must drop the connection so the node retries")
+		})
+	}
+}
+
+// A panic in the sign path must be contained: the handler drops the connection
+// and the signer process survives to serve the node's retry.
+func TestSignHandlerPanicDropsConnection(t *testing.T) {
+	for _, tc := range signHandlerCases {
+		t.Run(tc.name, func(t *testing.T) {
+			rs := NewReconnRemoteSigner(
+				"tcp://127.0.0.1:0", cometlog.NewNopLogger(), panickingPrivVal{},
+				net.Dialer{}, 1024*1024, ConnAuth{}, nil,
+			)
+
+			_, drop := tc.call(rs, context.Background())
+			require.True(t, drop, "a sign panic must drop the connection, not kill the signer")
+		})
+	}
+}
+
+// A slashing-protection refusal (a double-sign gate rejection) must still be
+// answered with a RemoteSignerError and must not drop the connection: the node
+// is correct to treat it as terminal and must never retry it.
 func TestSignHandlerRefusalAnswersWithError(t *testing.T) {
 	for _, tc := range signHandlerCases {
 		t.Run(tc.name, func(t *testing.T) {

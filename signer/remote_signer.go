@@ -34,7 +34,7 @@ const (
 	// answering. It is deliberately NOT answered with a RemoteSignerError: a
 	// strict node (tm2) treats that as a terminal signer refusal and never
 	// retries it, while a dropped connection is a transport error its retry
-	// budget handles (see abandonSign). The value must be shorter than the chain
+	// budget handles (see signRefusal). The value must be shorter than the chain
 	// node's priv-validator read/write timeout (CometBFT/tm2 default 5s) and
 	// longer than the per-cosigner grpcTimeout so a normal sign round completes.
 	// The budget starts when the request handler runs — request read/decode and
@@ -374,7 +374,7 @@ func (rs *ReconnRemoteSigner) handleRequest(
 	case *cometprotoprivval.Message_SignProposalRequest:
 		return rs.handleSignProposalRequest(ctx, typedReq.SignProposalRequest.ChainId, typedReq.SignProposalRequest.Proposal)
 	case *cometprotoprivval.Message_PubKeyRequest:
-		return rs.handlePubKeyRequest(typedReq.PubKeyRequest.ChainId), false
+		return rs.handlePubKeyRequest(ctx, typedReq.PubKeyRequest.ChainId), false
 	case *cometprotoprivval.Message_PingRequest:
 		return rs.handlePingRequest(), false
 	default:
@@ -409,6 +409,15 @@ func (rs *ReconnRemoteSigner) signWithTimeout(
 	// timeout has abandoned the receiver.
 	resultCh := make(chan signResult, 1)
 	go func() {
+		// A panic in the sign path must not kill the signer process; surfaced
+		// as an error, it drops the chain node connection like any transient
+		// sign failure. The channel is buffered, so this send only lands when
+		// the normal send below never happened.
+		defer func() {
+			if r := recover(); r != nil {
+				resultCh <- signResult{err: fmt.Errorf("panic in sign path: %v", r)}
+			}
+		}()
 		sig, voteExtSig, timestamp, err := signAndTrack(ctx, rs.Logger, rs.privVal, chainID, block)
 		resultCh <- signResult{sig, voteExtSig, timestamp, err}
 	}()
@@ -422,22 +431,41 @@ func (rs *ReconnRemoteSigner) signWithTimeout(
 	}
 }
 
-// abandonSign reports whether a sign error means the request ran out of time
-// (or the signer is shutting down), in which case the connection must be
-// dropped WITHOUT a response. tm2 wraps a response error into
-// WrappedRemoteSignerError and treats it as a terminal signer refusal — it is
-// never retried (retry_signer_client.shouldRetry), so answering would lose the
-// vote outright. A dropped connection instead surfaces as a transport error,
-// which the node retries (5 attempts, 1s apart, by default); the re-dialed
-// leader serves the retry from the cached signature if the abandoned attempt
-// completed, or signs afresh.
+// signRefusal reports whether a sign error is a deliberate slashing-protection
+// refusal — a double-sign gate rejection the chain node must never retry. Only
+// those are answered with a RemoteSignerError: tm2 wraps a response error into
+// WrappedRemoteSignerError and treats it as terminal, never retried
+// (retry_signer_client.shouldRetry). Every other sign error — timeout,
+// shutdown, failed combine, missing cosigners, a recovered panic — drops the
+// connection WITHOUT a response instead: that surfaces on the node as a
+// transport error, which it retries (5 attempts, 1s apart, by default), and the
+// re-dialed leader serves the retry from the cached signature if the abandoned
+// attempt completed, or signs afresh.
 //
 // An abandoned attempt can leave some cosigners holding shares from a nonce set
-// that a later retry does not use; that combine fails signature verification
-// and the retry burns an attempt (nonce-cache follow-up), but no signature over
-// conflicting payloads can result.
-func abandonSign(err error) bool {
-	return errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)
+// that a later retry does not use; that combine fails signature verification,
+// drops the connection again, and so burns one of the node's retry attempts
+// (nonce-cache follow-up), but no signature over conflicting payloads can
+// result.
+func signRefusal(err error) bool {
+	var (
+		beyondBlock   *BeyondBlockError
+		heightReg     *HeightRegressionError
+		roundReg      *RoundRegressionError
+		stepReg       *StepRegressionError
+		conflicting   *ConflictingDataError
+		diffBlockIDs  *DiffBlockIDsError
+		alreadySigned *AlreadySignedVoteError
+		sameHRS       *SameHRSError
+	)
+	return errors.As(err, &beyondBlock) ||
+		errors.As(err, &heightReg) ||
+		errors.As(err, &roundReg) ||
+		errors.As(err, &stepReg) ||
+		errors.As(err, &conflicting) ||
+		errors.As(err, &diffBlockIDs) ||
+		errors.As(err, &alreadySigned) ||
+		errors.As(err, &sameHRS)
 }
 
 func (rs *ReconnRemoteSigner) handleSignVoteRequest(
@@ -465,18 +493,19 @@ func (rs *ReconnRemoteSigner) handleSignVoteRequest(
 
 	sig, voteExtSig, timestamp, err := rs.signWithTimeout(ctx, chainID, VoteToBlock(chainID, vote))
 	if err != nil {
-		if abandonSign(err) {
-			rs.Logger.Error(
-				"Sign vote request not completed in time, dropping connection so the node retries",
-				"chain_id", chainID,
-				"height", vote.Height,
-				"round", vote.Round,
-				"err", err,
-			)
-			return cometprotoprivval.Message{}, true
+		if signRefusal(err) {
+			msgSum.SignedVoteResponse.Error = getRemoteSignerError(err)
+			return cometprotoprivval.Message{Sum: msgSum}, false
 		}
-		msgSum.SignedVoteResponse.Error = getRemoteSignerError(err)
-		return cometprotoprivval.Message{Sum: msgSum}, false
+		totalAbandonedSignRequests.WithLabelValues(chainID).Inc()
+		rs.Logger.Error(
+			"Sign vote request failed, dropping connection so the node retries",
+			"chain_id", chainID,
+			"height", vote.Height,
+			"round", vote.Round,
+			"err", err,
+		)
+		return cometprotoprivval.Message{}, true
 	}
 
 	// Echo the full request vote with only the signer-owned fields replaced: a
@@ -513,18 +542,19 @@ func (rs *ReconnRemoteSigner) handleSignProposalRequest(
 
 	signature, _, timestamp, err := rs.signWithTimeout(ctx, chainID, ProposalToBlock(chainID, proposal))
 	if err != nil {
-		if abandonSign(err) {
-			rs.Logger.Error(
-				"Sign proposal request not completed in time, dropping connection so the node retries",
-				"chain_id", chainID,
-				"height", proposal.Height,
-				"round", proposal.Round,
-				"err", err,
-			)
-			return cometprotoprivval.Message{}, true
+		if signRefusal(err) {
+			msgSum.SignedProposalResponse.Error = getRemoteSignerError(err)
+			return cometprotoprivval.Message{Sum: msgSum}, false
 		}
-		msgSum.SignedProposalResponse.Error = getRemoteSignerError(err)
-		return cometprotoprivval.Message{Sum: msgSum}, false
+		totalAbandonedSignRequests.WithLabelValues(chainID).Inc()
+		rs.Logger.Error(
+			"Sign proposal request failed, dropping connection so the node retries",
+			"chain_id", chainID,
+			"height", proposal.Height,
+			"round", proposal.Round,
+			"err", err,
+		)
+		return cometprotoprivval.Message{}, true
 	}
 
 	// Same echo contract as the vote response: return the request proposal with
@@ -535,7 +565,7 @@ func (rs *ReconnRemoteSigner) handleSignProposalRequest(
 	return cometprotoprivval.Message{Sum: msgSum}, false
 }
 
-func (rs *ReconnRemoteSigner) handlePubKeyRequest(chainID string) cometprotoprivval.Message {
+func (rs *ReconnRemoteSigner) handlePubKeyRequest(ctx context.Context, chainID string) cometprotoprivval.Message {
 	msgSum := &cometprotoprivval.Message_PubKeyResponse{PubKeyResponse: &cometprotoprivval.PubKeyResponse{
 		PubKey: cometprotocrypto.PublicKey{},
 		Error:  nil,
@@ -551,7 +581,7 @@ func (rs *ReconnRemoteSigner) handlePubKeyRequest(chainID string) cometprotopriv
 
 	totalPubKeyRequests.WithLabelValues(chainID).Inc()
 
-	pubKey, err := rs.privVal.GetPubKey(context.TODO(), chainID)
+	pubKey, err := rs.privVal.GetPubKey(ctx, chainID)
 	if err != nil {
 		rs.Logger.Error(
 			"Failed to get Pub Key",

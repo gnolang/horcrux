@@ -274,6 +274,13 @@ var (
 		Help: "Total Times Combined Signature is Invalid",
 	})
 
+	totalAbandonedSignRequests = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "signer_total_abandoned_sign_requests",
+		Help: "Total Sign Requests Abandoned by Dropping the Chain Node Connection so the Node Retries",
+	},
+		[]string{"chain_id"},
+	)
+
 	totalInsufficientCosigners = promauto.NewCounter(prometheus.CounterOpts{
 		Name: "signer_error_total_insufficient_cosigners",
 		Help: "Total Times Cosigners doesn't reach threshold",
