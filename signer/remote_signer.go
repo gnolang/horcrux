@@ -28,6 +28,23 @@ const (
 	leaderCheckInterval = 250 * time.Millisecond
 )
 
+const (
+	// defaultSignRequestTimeout bounds a single sign request end to end. It must
+	// be shorter than the chain node's priv-validator read/write timeout
+	// (CometBFT/tm2 default 5s) so the node always receives a response — success
+	// or error — before it drops the connection, and longer than the per-cosigner
+	// grpcTimeout so a normal sign round can complete.
+	defaultSignRequestTimeout = 3500 * time.Millisecond
+
+	// defaultChainNodeReadTimeout / defaultChainNodeWriteTimeout bound reads and
+	// writes on the chain node connection so a dead or half-open socket is
+	// detected and the signer re-dials while still leader. The read timeout must
+	// exceed the chain node's ping interval (tm2 pings at ~2/3 of its read/write
+	// timeout) so idle periods do not trip it.
+	defaultChainNodeReadTimeout  = 10 * time.Second
+	defaultChainNodeWriteTimeout = 10 * time.Second
+)
+
 // PrivValidator is a wrapper for tendermint PrivValidator,
 // with additional Stop method for safe shutdown.
 type PrivValidator interface {
@@ -57,6 +74,12 @@ type ReconnRemoteSigner struct {
 	// it turns false, so a chain node holding a single signer slot always talks
 	// to the current raft leader. Nil means always connect.
 	isLeader func() bool
+
+	// Timeouts are set once at construction and only read afterward. See the
+	// default* consts for the rationale.
+	signRequestTimeout    time.Duration
+	chainNodeReadTimeout  time.Duration
+	chainNodeWriteTimeout time.Duration
 }
 
 // NewReconnRemoteSigner return a ReconnRemoteSigner that will dial using the given
@@ -81,13 +104,16 @@ func NewReconnRemoteSigner(
 	}
 
 	rs := &ReconnRemoteSigner{
-		address:     address,
-		privVal:     privVal,
-		dialer:      dialer,
-		privKey:     privKey,
-		nodePubKey:  connAuth.NodePubKey,
-		maxReadSize: maxReadSize,
-		isLeader:    isLeader,
+		address:               address,
+		privVal:               privVal,
+		dialer:                dialer,
+		privKey:               privKey,
+		nodePubKey:            connAuth.NodePubKey,
+		maxReadSize:           maxReadSize,
+		isLeader:              isLeader,
+		signRequestTimeout:    defaultSignRequestTimeout,
+		chainNodeReadTimeout:  defaultChainNodeReadTimeout,
+		chainNodeWriteTimeout: defaultChainNodeWriteTimeout,
 	}
 
 	rs.BaseService = *cometservice.NewBaseService(logger, "RemoteSigner", rs)
@@ -198,6 +224,16 @@ func (rs *ReconnRemoteSigner) loop(ctx context.Context) {
 			go rs.releaseConnOnLeadershipLoss(conn, watchStop)
 		}
 
+		// Bound the read so a dead or half-open chain node socket is detected and
+		// the connection re-dialed while still leader, instead of blocking here
+		// forever. The chain node pings well within this window, so a healthy idle
+		// connection never trips it.
+		if err := conn.SetReadDeadline(time.Now().Add(rs.chainNodeReadTimeout)); err != nil {
+			rs.Logger.Error("Failed to set read deadline", "address", rs.address, "err", err)
+			dropConn()
+			continue
+		}
+
 		req, err := ReadMsg(conn, rs.maxReadSize)
 		if err != nil {
 			rs.Logger.Error(
@@ -214,6 +250,12 @@ func (rs *ReconnRemoteSigner) loop(ctx context.Context) {
 		// recover and drop the connection, letting the node reconnect.
 		res, panicked := rs.handleRequestSafely(req)
 		if panicked {
+			dropConn()
+			continue
+		}
+
+		if err := conn.SetWriteDeadline(time.Now().Add(rs.chainNodeWriteTimeout)); err != nil {
+			rs.Logger.Error("Failed to set write deadline", "address", rs.address, "err", err)
 			dropConn()
 			continue
 		}
@@ -312,6 +354,38 @@ func (rs *ReconnRemoteSigner) handleRequest(req cometprotoprivval.Message) comet
 	}
 }
 
+// signWithTimeout runs signAndTrack under signRequestTimeout so a stuck sign
+// path can never hold the chain node's priv-validator connection past its
+// read/write deadline. On expiry it returns a timeout error (the handlers turn
+// that into a RemoteSignerError, so the node always gets an answer). The signing
+// goroutine observes the same deadline via ctx and is otherwise bounded by
+// horcrux's own per-cosigner grpcTimeout, so it does not leak indefinitely.
+func (rs *ReconnRemoteSigner) signWithTimeout(chainID string, block Block) ([]byte, []byte, time.Time, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), rs.signRequestTimeout)
+	defer cancel()
+
+	type signResult struct {
+		sig        []byte
+		voteExtSig []byte
+		timestamp  time.Time
+		err        error
+	}
+	// Buffered so the signing goroutine can always send and exit, even after a
+	// timeout has abandoned the receiver.
+	resultCh := make(chan signResult, 1)
+	go func() {
+		sig, voteExtSig, timestamp, err := signAndTrack(ctx, rs.Logger, rs.privVal, chainID, block)
+		resultCh <- signResult{sig, voteExtSig, timestamp, err}
+	}()
+
+	select {
+	case r := <-resultCh:
+		return r.sig, r.voteExtSig, r.timestamp, r.err
+	case <-ctx.Done():
+		return nil, nil, block.Timestamp, fmt.Errorf("sign request timed out after %s", rs.signRequestTimeout)
+	}
+}
+
 func (rs *ReconnRemoteSigner) handleSignVoteRequest(chainID string, vote *cometproto.Vote) cometprotoprivval.Message {
 	msgSum := &cometprotoprivval.Message_SignedVoteResponse{SignedVoteResponse: &cometprotoprivval.SignedVoteResponse{
 		Vote:  cometproto.Vote{},
@@ -331,13 +405,7 @@ func (rs *ReconnRemoteSigner) handleSignVoteRequest(chainID string, vote *cometp
 		return cometprotoprivval.Message{Sum: msgSum}
 	}
 
-	sig, voteExtSig, timestamp, err := signAndTrack(
-		context.TODO(),
-		rs.Logger,
-		rs.privVal,
-		chainID,
-		VoteToBlock(chainID, vote),
-	)
+	sig, voteExtSig, timestamp, err := rs.signWithTimeout(chainID, VoteToBlock(chainID, vote))
 	if err != nil {
 		msgSum.SignedVoteResponse.Error = getRemoteSignerError(err)
 		return cometprotoprivval.Message{Sum: msgSum}
@@ -374,13 +442,7 @@ func (rs *ReconnRemoteSigner) handleSignProposalRequest(
 		return cometprotoprivval.Message{Sum: msgSum}
 	}
 
-	signature, _, timestamp, err := signAndTrack(
-		context.TODO(),
-		rs.Logger,
-		rs.privVal,
-		chainID,
-		ProposalToBlock(chainID, proposal),
-	)
+	signature, _, timestamp, err := rs.signWithTimeout(chainID, ProposalToBlock(chainID, proposal))
 	if err != nil {
 		msgSum.SignedProposalResponse.Error = getRemoteSignerError(err)
 		return cometprotoprivval.Message{Sum: msgSum}
