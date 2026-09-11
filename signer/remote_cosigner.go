@@ -105,6 +105,10 @@ func getGRPCClient(address string, tlsConfig *tls.Config) (proto.CosignerClient,
 	if err != nil {
 		return nil, err
 	}
+	// grpc.NewClient is lazy: without this, name resolution and the TCP/TLS
+	// handshake happen inside the first sign RPC, eating into its per-call
+	// deadline (grpcTimeout). Connect starts them immediately instead.
+	conn.Connect()
 	return proto.NewCosignerClient(conn), nil
 }
 
