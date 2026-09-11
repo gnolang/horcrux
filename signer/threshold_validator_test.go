@@ -398,6 +398,12 @@ func getTestLocalCosigners(t *testing.T, threshold, total uint8) ([]*LocalCosign
 
 		cosigners[i] = cosigner
 
+		// Sign state saves are asynchronous, and ThresholdValidator.Stop only
+		// awaits its own cosigner's writes. Every cosigner's pending writes must
+		// finish before t.TempDir removes the directory under them, or a
+		// straggler save panics inside its goroutine and fails the package.
+		t.Cleanup(cosigner.waitForSignStatesToFlushToDisk)
+
 		err = loadKeyForLocalCosigner(cosigner, privateKey.PubKey(), testChainID, privShards[i])
 		require.NoError(t, err)
 
