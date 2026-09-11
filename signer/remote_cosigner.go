@@ -13,7 +13,24 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/keepalive"
 )
+
+// peerKeepaliveMinTime is the minimum keepalive ping interval the cosigner gRPC
+// server tolerates (its KeepaliveEnforcementPolicy MinTime, see raft_store.go).
+// peerKeepalive.Time must be >= this value or the server GOAWAYs the connection
+// with "too_many_pings".
+const peerKeepaliveMinTime = 5 * time.Second
+
+// peerKeepalive keeps the connection to a peer cosigner actively probed so a
+// peer that has died or gone half-open (TCP up, process gone) is detected and
+// the connection torn down promptly, instead of sign RPCs paying their full
+// per-call deadline against a black hole.
+var peerKeepalive = keepalive.ClientParameters{
+	Time:                10 * time.Second,
+	Timeout:             3 * time.Second,
+	PermitWithoutStream: true,
+}
 
 var _ Cosigner = &RemoteCosigner{}
 
@@ -75,7 +92,11 @@ func getGRPCClient(address string, tlsConfig *tls.Config) (proto.CosignerClient,
 	} else {
 		grpcAddress = url.Host
 	}
-	conn, err := grpc.Dial(grpcAddress, grpc.WithTransportCredentials(ClusterTransportCreds(tlsConfig)))
+	conn, err := grpc.Dial(
+		grpcAddress,
+		grpc.WithTransportCredentials(ClusterTransportCreds(tlsConfig)),
+		grpc.WithKeepaliveParams(peerKeepalive),
+	)
 	if err != nil {
 		return nil, err
 	}

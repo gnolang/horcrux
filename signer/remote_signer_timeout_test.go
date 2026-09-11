@@ -116,3 +116,14 @@ func TestChainNodeReadDeadlineRedials(t *testing.T) {
 		t.Fatal("signer did not re-dial after the read deadline expired on a silent node")
 	}
 }
+
+// The peer keepalive ping interval must stay at or above the cosigner gRPC
+// server's enforcement MinTime; otherwise the server GOAWAYs peer connections
+// with "too_many_pings" and the cluster transport breaks. This guards both
+// values from drifting into that misconfiguration.
+func TestPeerKeepaliveRespectsServerEnforcement(t *testing.T) {
+	require.GreaterOrEqual(t, peerKeepalive.Time, peerKeepaliveMinTime,
+		"peerKeepalive.Time must be >= the server's KeepaliveEnforcementPolicy MinTime")
+	require.True(t, peerKeepalive.PermitWithoutStream,
+		"peer keepalive must ping without an active stream so idle-but-dead peers are detected")
+}

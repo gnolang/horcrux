@@ -29,6 +29,7 @@ import (
 	"github.com/strangelove-ventures/horcrux/v3/signer/proto"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/keepalive"
 )
 
 var _ Leader = (*RaftStore)(nil)
@@ -111,6 +112,12 @@ func (s *RaftStore) init() error {
 	serverOpts := []grpc.ServerOption{
 		grpc.UnaryInterceptor(recoveryUnaryInterceptor(s.logger)),
 		grpc.StreamInterceptor(recoveryStreamInterceptor(s.logger)),
+		// Accept the peer cosigners' keepalive pings (peerKeepalive) rather than
+		// answering with GOAWAY; MinTime must not exceed the client ping interval.
+		grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{
+			MinTime:             peerKeepaliveMinTime,
+			PermitWithoutStream: true,
+		}),
 	}
 	if s.tlsConfig != nil {
 		serverOpts = append(serverOpts, grpc.Creds(credentials.NewTLS(s.tlsConfig)))
