@@ -22,14 +22,19 @@ import (
 // with "too_many_pings".
 const peerKeepaliveMinTime = 5 * time.Second
 
-// peerKeepalive keeps the connection to a peer cosigner actively probed so a
-// peer that has died or gone half-open (TCP up, process gone) is detected and
-// the connection torn down promptly, instead of sign RPCs paying their full
-// per-call deadline against a black hole.
-var peerKeepalive = keepalive.ClientParameters{
-	Time:                10 * time.Second,
-	Timeout:             3 * time.Second,
-	PermitWithoutStream: true,
+// peerKeepalive returns the client keepalive parameters that keep the
+// connection to a peer cosigner actively probed, so a peer that has died or
+// gone half-open (TCP up, process gone) is detected and the connection torn
+// down promptly, instead of sign RPCs paying their full per-call deadline
+// against a black hole. A function rather than shared state: the value cannot
+// be mutated. Time must not go below grpc-go's 10s KeepaliveMinPingTime floor
+// (it would be silently clamped) nor below peerKeepaliveMinTime.
+func peerKeepalive() keepalive.ClientParameters {
+	return keepalive.ClientParameters{
+		Time:                10 * time.Second,
+		Timeout:             3 * time.Second,
+		PermitWithoutStream: true,
+	}
 }
 
 var _ Cosigner = &RemoteCosigner{}
@@ -92,10 +97,10 @@ func getGRPCClient(address string, tlsConfig *tls.Config) (proto.CosignerClient,
 	} else {
 		grpcAddress = url.Host
 	}
-	conn, err := grpc.Dial(
+	conn, err := grpc.NewClient(
 		grpcAddress,
 		grpc.WithTransportCredentials(ClusterTransportCreds(tlsConfig)),
-		grpc.WithKeepaliveParams(peerKeepalive),
+		grpc.WithKeepaliveParams(peerKeepalive()),
 	)
 	if err != nil {
 		return nil, err
