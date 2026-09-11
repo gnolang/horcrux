@@ -2,6 +2,7 @@ package signer
 
 import (
 	"context"
+	"errors"
 	"net"
 	"testing"
 	"time"
@@ -26,50 +27,125 @@ func (blockingPrivVal) Sign(ctx context.Context, _ string, block Block) ([]byte,
 func (blockingPrivVal) GetPubKey(context.Context, string) ([]byte, error) { return nil, nil }
 func (blockingPrivVal) Stop()                                             {}
 
-// A sign request must never hold the chain node's priv-validator connection past
-// the node's read/write deadline: the handler bounds signing at
-// signRequestTimeout and returns a RemoteSignerError rather than blocking.
-func TestHandleSignVoteRequestTimesOut(t *testing.T) {
-	rs := NewReconnRemoteSigner(
-		"tcp://127.0.0.1:0", cometlog.NewNopLogger(), blockingPrivVal{},
-		net.Dialer{}, 1024*1024, ConnAuth{}, nil,
-	)
-	rs.signRequestTimeout = 100 * time.Millisecond
+// refusingPrivVal is a PrivValidator whose Sign fails immediately, modeling a
+// genuine signer refusal such as a double-sign gate rejection.
+type refusingPrivVal struct{}
 
-	vote := cometproto.Vote{Type: cometproto.PrecommitType, Height: 1, Round: 0}
+func (refusingPrivVal) Sign(_ context.Context, _ string, block Block) ([]byte, []byte, time.Time, error) {
+	return nil, nil, block.Timestamp, errors.New("sign refused by test validator")
+}
+func (refusingPrivVal) GetPubKey(context.Context, string) ([]byte, error) { return nil, nil }
+func (refusingPrivVal) Stop()                                             {}
 
-	done := make(chan cometprotoprivval.Message, 1)
-	go func() { done <- rs.handleSignVoteRequest("test-chain", &vote) }()
+// signHandlerCases drives both sign handlers through the same scenario: the
+// vote and proposal paths must classify outcomes identically.
+var signHandlerCases = []struct {
+	name string
+	call func(rs *ReconnRemoteSigner, ctx context.Context) (cometprotoprivval.Message, bool)
+	err  func(res cometprotoprivval.Message) *cometprotoprivval.RemoteSignerError
+}{
+	{
+		name: "vote",
+		call: func(rs *ReconnRemoteSigner, ctx context.Context) (cometprotoprivval.Message, bool) {
+			vote := cometproto.Vote{Type: cometproto.PrecommitType, Height: 1, Round: 0}
+			return rs.handleSignVoteRequest(ctx, "test-chain", &vote)
+		},
+		err: func(res cometprotoprivval.Message) *cometprotoprivval.RemoteSignerError {
+			return res.GetSignedVoteResponse().GetError()
+		},
+	},
+	{
+		name: "proposal",
+		call: func(rs *ReconnRemoteSigner, ctx context.Context) (cometprotoprivval.Message, bool) {
+			proposal := cometproto.Proposal{Type: cometproto.ProposalType, Height: 1, Round: 0}
+			return rs.handleSignProposalRequest(ctx, "test-chain", &proposal)
+		},
+		err: func(res cometprotoprivval.Message) *cometprotoprivval.RemoteSignerError {
+			return res.GetSignedProposalResponse().GetError()
+		},
+	},
+}
 
-	select {
-	case res := <-done:
-		signed := res.GetSignedVoteResponse()
-		require.NotNil(t, signed)
-		require.NotNil(t, signed.Error, "a timed-out sign must return a RemoteSignerError")
-	case <-time.After(2 * time.Second):
-		t.Fatal("handler did not return within the sign timeout — it blocked on Sign")
+// A sign request that exceeds signRequestTimeout must signal the request loop
+// to drop the connection without answering: tm2 treats a RemoteSignerError
+// response as a terminal signer refusal (never retried), while a dropped
+// connection is a transport error that the node's retry budget handles.
+func TestSignHandlerTimeoutDropsConnection(t *testing.T) {
+	for _, tc := range signHandlerCases {
+		t.Run(tc.name, func(t *testing.T) {
+			rs := NewReconnRemoteSigner(
+				"tcp://127.0.0.1:0", cometlog.NewNopLogger(), blockingPrivVal{},
+				net.Dialer{}, 1024*1024, ConnAuth{}, nil,
+			)
+			rs.signRequestTimeout = 100 * time.Millisecond
+
+			type result struct {
+				res  cometprotoprivval.Message
+				drop bool
+			}
+			done := make(chan result, 1)
+			go func() {
+				res, drop := tc.call(rs, context.Background())
+				done <- result{res, drop}
+			}()
+
+			select {
+			case r := <-done:
+				require.True(t, r.drop,
+					"a timed-out sign must drop the connection so the node retries; "+
+						"an answer would be a terminal refusal on tm2")
+			case <-time.After(2 * time.Second):
+				t.Fatal("handler did not return within the sign timeout — it blocked on Sign")
+			}
+		})
 	}
 }
 
-func TestHandleSignProposalRequestTimesOut(t *testing.T) {
+// A genuine signer refusal (the sign path itself errors, e.g. a double-sign
+// gate) must still be answered with a RemoteSignerError and must not drop the
+// connection: the node is correct to treat it as terminal.
+func TestSignHandlerRefusalAnswersWithError(t *testing.T) {
+	for _, tc := range signHandlerCases {
+		t.Run(tc.name, func(t *testing.T) {
+			rs := NewReconnRemoteSigner(
+				"tcp://127.0.0.1:0", cometlog.NewNopLogger(), refusingPrivVal{},
+				net.Dialer{}, 1024*1024, ConnAuth{}, nil,
+			)
+
+			res, drop := tc.call(rs, context.Background())
+			require.False(t, drop, "a signer refusal must be answered, not dropped")
+			rse := tc.err(res)
+			require.NotNil(t, rse, "a signer refusal must carry a RemoteSignerError")
+			require.Contains(t, rse.Description, "sign refused by test validator")
+		})
+	}
+}
+
+// Cancelling the signer's context (shutdown) must abort an in-flight sign and
+// signal a drop rather than answer.
+func TestSignHandlerShutdownAbortsSign(t *testing.T) {
 	rs := NewReconnRemoteSigner(
 		"tcp://127.0.0.1:0", cometlog.NewNopLogger(), blockingPrivVal{},
 		net.Dialer{}, 1024*1024, ConnAuth{}, nil,
 	)
-	rs.signRequestTimeout = 100 * time.Millisecond
 
-	proposal := cometproto.Proposal{Type: cometproto.ProposalType, Height: 1, Round: 0}
+	ctx, cancel := context.WithCancel(context.Background())
+	type result struct {
+		drop bool
+	}
+	done := make(chan result, 1)
+	go func() {
+		vote := cometproto.Vote{Type: cometproto.PrecommitType, Height: 1, Round: 0}
+		_, drop := rs.handleSignVoteRequest(ctx, "test-chain", &vote)
+		done <- result{drop}
+	}()
 
-	done := make(chan cometprotoprivval.Message, 1)
-	go func() { done <- rs.handleSignProposalRequest("test-chain", &proposal) }()
-
+	cancel()
 	select {
-	case res := <-done:
-		signed := res.GetSignedProposalResponse()
-		require.NotNil(t, signed)
-		require.NotNil(t, signed.Error, "a timed-out sign must return a RemoteSignerError")
+	case r := <-done:
+		require.True(t, r.drop, "a cancelled sign must signal a drop, not an answer")
 	case <-time.After(2 * time.Second):
-		t.Fatal("handler did not return within the sign timeout — it blocked on Sign")
+		t.Fatal("handler did not observe context cancellation")
 	}
 }
 
@@ -122,8 +198,9 @@ func TestChainNodeReadDeadlineRedials(t *testing.T) {
 // with "too_many_pings" and the cluster transport breaks. This guards both
 // values from drifting into that misconfiguration.
 func TestPeerKeepaliveRespectsServerEnforcement(t *testing.T) {
-	require.GreaterOrEqual(t, peerKeepalive.Time, peerKeepaliveMinTime,
-		"peerKeepalive.Time must be >= the server's KeepaliveEnforcementPolicy MinTime")
-	require.True(t, peerKeepalive.PermitWithoutStream,
+	params := peerKeepalive()
+	require.GreaterOrEqual(t, params.Time, peerKeepaliveMinTime,
+		"peerKeepalive Time must be >= the server's KeepaliveEnforcementPolicy MinTime")
+	require.True(t, params.PermitWithoutStream,
 		"peer keepalive must ping without an active stream so idle-but-dead peers are detected")
 }

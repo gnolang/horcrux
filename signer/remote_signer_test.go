@@ -172,7 +172,8 @@ func TestHandleSignVoteRequestEchoesVote(t *testing.T) {
 		ValidatorIndex:   7,
 	}
 
-	res := rs.handleSignVoteRequest("test-chain", &vote)
+	res, dropConn := rs.handleSignVoteRequest(context.Background(), "test-chain", &vote)
+	require.False(t, dropConn)
 	signed := res.GetSignedVoteResponse()
 	require.NotNil(t, signed)
 	require.Nil(t, signed.Error)
@@ -204,7 +205,8 @@ func TestHandleSignProposalRequestEchoesProposal(t *testing.T) {
 		Timestamp: time.Unix(1700000000, 0).UTC(),
 	}
 
-	res := rs.handleSignProposalRequest("test-chain", &proposal)
+	res, dropConn := rs.handleSignProposalRequest(context.Background(), "test-chain", &proposal)
+	require.False(t, dropConn)
 	signed := res.GetSignedProposalResponse()
 	require.NotNil(t, signed)
 	require.Nil(t, signed.Error)

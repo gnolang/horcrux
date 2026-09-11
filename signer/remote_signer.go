@@ -29,11 +29,17 @@ const (
 )
 
 const (
-	// defaultSignRequestTimeout bounds a single sign request end to end. It must
-	// be shorter than the chain node's priv-validator read/write timeout
-	// (CometBFT/tm2 default 5s) so the node always receives a response — success
-	// or error — before it drops the connection, and longer than the per-cosigner
-	// grpcTimeout so a normal sign round can complete.
+	// defaultSignRequestTimeout bounds how long a sign request may run before the
+	// signer abandons it and drops the chain node connection instead of
+	// answering. It is deliberately NOT answered with a RemoteSignerError: a
+	// strict node (tm2) treats that as a terminal signer refusal and never
+	// retries it, while a dropped connection is a transport error its retry
+	// budget handles (see abandonSign). The value must be shorter than the chain
+	// node's priv-validator read/write timeout (CometBFT/tm2 default 5s) and
+	// longer than the per-cosigner grpcTimeout so a normal sign round completes.
+	// The budget starts when the request handler runs — request read/decode and
+	// the node↔signer round trip are outside it — so the 1.5s headroom against
+	// tm2's 5s assumes the signer and node share a low-latency network (LAN).
 	defaultSignRequestTimeout = 3500 * time.Millisecond
 
 	// defaultChainNodeReadTimeout / defaultChainNodeWriteTimeout bound reads and
@@ -80,6 +86,10 @@ type ReconnRemoteSigner struct {
 	signRequestTimeout    time.Duration
 	chainNodeReadTimeout  time.Duration
 	chainNodeWriteTimeout time.Duration
+
+	// cancel ends the request loop's context on OnStop, aborting in-flight sign
+	// waits, dials and leadership parks.
+	cancel context.CancelFunc
 }
 
 // NewReconnRemoteSigner return a ReconnRemoteSigner that will dial using the given
@@ -122,12 +132,19 @@ func NewReconnRemoteSigner(
 
 // OnStart implements cmn.Service.
 func (rs *ReconnRemoteSigner) OnStart() error {
-	go rs.loop(context.Background())
+	ctx, cancel := context.WithCancel(context.Background())
+	rs.cancel = cancel
+	go rs.loop(ctx)
 	return nil
 }
 
-// OnStop implements cmn.Service.
+// OnStop implements cmn.Service. Cancelling the loop context first aborts an
+// in-flight sign wait and any dial or leadership park, so shutdown does not
+// hang behind them.
 func (rs *ReconnRemoteSigner) OnStop() {
+	if rs.cancel != nil {
+		rs.cancel()
+	}
 	rs.privVal.Stop()
 }
 
@@ -245,11 +262,14 @@ func (rs *ReconnRemoteSigner) loop(ctx context.Context) {
 			continue
 		}
 
-		// handleRequest handles request errors. We always send back a response.
-		// A malformed request must never panic the process (validator downtime);
-		// recover and drop the connection, letting the node reconnect.
-		res, panicked := rs.handleRequestSafely(req)
-		if panicked {
+		// handleRequestSafely answers requests it can resolve in time — including
+		// signer refusals, which are sent back as RemoteSignerError. It signals
+		// dropReq when the connection must instead be torn down without an answer:
+		// a sign that exceeded signRequestTimeout (the node must see a retryable
+		// transport error, not a terminal refusal), or a recovered panic on
+		// malformed input (which must never crash the process).
+		res, dropReq, panicked := rs.handleRequestSafely(ctx, req)
+		if dropReq || panicked {
 			dropConn()
 			continue
 		}
@@ -320,11 +340,13 @@ func (rs *ReconnRemoteSigner) releaseConnOnLeadershipLoss(conn net.Conn, stop <-
 }
 
 // handleRequestSafely wraps handleRequest so a panic on malformed input becomes a
-// dropped connection rather than a process crash. It returns panicked=true when a
-// panic was recovered.
+// dropped connection rather than a process crash. It returns dropReq=true when
+// the connection must be torn down without answering (see handleRequest), and
+// panicked=true when a panic was recovered.
 func (rs *ReconnRemoteSigner) handleRequestSafely(
+	ctx context.Context,
 	req cometprotoprivval.Message,
-) (res cometprotoprivval.Message, panicked bool) {
+) (res cometprotoprivval.Message, dropReq bool, panicked bool) {
 	defer func() {
 		if r := recover(); r != nil {
 			rs.Logger.Error(
@@ -335,33 +357,46 @@ func (rs *ReconnRemoteSigner) handleRequestSafely(
 			panicked = true
 		}
 	}()
-	return rs.handleRequest(req), false
+	res, dropReq = rs.handleRequest(ctx, req)
+	return res, dropReq, false
 }
 
-func (rs *ReconnRemoteSigner) handleRequest(req cometprotoprivval.Message) cometprotoprivval.Message {
+// handleRequest resolves one privval request. The second return value is true
+// when no response must be written and the connection must be dropped instead —
+// the sign handlers use it for requests that ran out of time.
+func (rs *ReconnRemoteSigner) handleRequest(
+	ctx context.Context,
+	req cometprotoprivval.Message,
+) (cometprotoprivval.Message, bool) {
 	switch typedReq := req.Sum.(type) {
 	case *cometprotoprivval.Message_SignVoteRequest:
-		return rs.handleSignVoteRequest(typedReq.SignVoteRequest.ChainId, typedReq.SignVoteRequest.Vote)
+		return rs.handleSignVoteRequest(ctx, typedReq.SignVoteRequest.ChainId, typedReq.SignVoteRequest.Vote)
 	case *cometprotoprivval.Message_SignProposalRequest:
-		return rs.handleSignProposalRequest(typedReq.SignProposalRequest.ChainId, typedReq.SignProposalRequest.Proposal)
+		return rs.handleSignProposalRequest(ctx, typedReq.SignProposalRequest.ChainId, typedReq.SignProposalRequest.Proposal)
 	case *cometprotoprivval.Message_PubKeyRequest:
-		return rs.handlePubKeyRequest(typedReq.PubKeyRequest.ChainId)
+		return rs.handlePubKeyRequest(typedReq.PubKeyRequest.ChainId), false
 	case *cometprotoprivval.Message_PingRequest:
-		return rs.handlePingRequest()
+		return rs.handlePingRequest(), false
 	default:
 		rs.Logger.Error("Unknown request", "err", fmt.Errorf("%v", typedReq))
-		return cometprotoprivval.Message{}
+		return cometprotoprivval.Message{}, false
 	}
 }
 
-// signWithTimeout runs signAndTrack under signRequestTimeout so a stuck sign
-// path can never hold the chain node's priv-validator connection past its
-// read/write deadline. On expiry it returns a timeout error (the handlers turn
-// that into a RemoteSignerError, so the node always gets an answer). The signing
-// goroutine observes the same deadline via ctx and is otherwise bounded by
-// horcrux's own per-cosigner grpcTimeout, so it does not leak indefinitely.
-func (rs *ReconnRemoteSigner) signWithTimeout(chainID string, block Block) ([]byte, []byte, time.Time, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), rs.signRequestTimeout)
+// signWithTimeout runs signAndTrack, bounding how long the handler waits for an
+// answer by rs.signRequestTimeout (derived from ctx, so shutdown aborts the wait
+// too). The bound applies to the handler's answer only: parts of the sign path
+// do not observe ctx (the raft election poll, the same-HRS condition wait), so
+// an abandoned signing goroutine may keep running — its own internal timeouts
+// (per-cosigner grpcTimeout, bounded polls) end it within single-digit seconds.
+// The error returned on expiry wraps ctx.Err() so callers can classify it with
+// errors.Is.
+func (rs *ReconnRemoteSigner) signWithTimeout(
+	ctx context.Context,
+	chainID string,
+	block Block,
+) ([]byte, []byte, time.Time, error) {
+	ctx, cancel := context.WithTimeout(ctx, rs.signRequestTimeout)
 	defer cancel()
 
 	type signResult struct {
@@ -382,11 +417,34 @@ func (rs *ReconnRemoteSigner) signWithTimeout(chainID string, block Block) ([]by
 	case r := <-resultCh:
 		return r.sig, r.voteExtSig, r.timestamp, r.err
 	case <-ctx.Done():
-		return nil, nil, block.Timestamp, fmt.Errorf("sign request timed out after %s", rs.signRequestTimeout)
+		return nil, nil, block.Timestamp,
+			fmt.Errorf("sign request abandoned (timeout %s): %w", rs.signRequestTimeout, ctx.Err())
 	}
 }
 
-func (rs *ReconnRemoteSigner) handleSignVoteRequest(chainID string, vote *cometproto.Vote) cometprotoprivval.Message {
+// abandonSign reports whether a sign error means the request ran out of time
+// (or the signer is shutting down), in which case the connection must be
+// dropped WITHOUT a response. tm2 wraps a response error into
+// WrappedRemoteSignerError and treats it as a terminal signer refusal — it is
+// never retried (retry_signer_client.shouldRetry), so answering would lose the
+// vote outright. A dropped connection instead surfaces as a transport error,
+// which the node retries (5 attempts, 1s apart, by default); the re-dialed
+// leader serves the retry from the cached signature if the abandoned attempt
+// completed, or signs afresh.
+//
+// An abandoned attempt can leave some cosigners holding shares from a nonce set
+// that a later retry does not use; that combine fails signature verification
+// and the retry burns an attempt (nonce-cache follow-up), but no signature over
+// conflicting payloads can result.
+func abandonSign(err error) bool {
+	return errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)
+}
+
+func (rs *ReconnRemoteSigner) handleSignVoteRequest(
+	ctx context.Context,
+	chainID string,
+	vote *cometproto.Vote,
+) (cometprotoprivval.Message, bool) {
 	msgSum := &cometprotoprivval.Message_SignedVoteResponse{SignedVoteResponse: &cometprotoprivval.SignedVoteResponse{
 		Vote:  cometproto.Vote{},
 		Error: nil,
@@ -394,21 +452,31 @@ func (rs *ReconnRemoteSigner) handleSignVoteRequest(chainID string, vote *cometp
 
 	if err := ValidateChainID(chainID); err != nil {
 		msgSum.SignedVoteResponse.Error = getRemoteSignerError(err)
-		return cometprotoprivval.Message{Sum: msgSum}
+		return cometprotoprivval.Message{Sum: msgSum}, false
 	}
 	if vote == nil {
 		msgSum.SignedVoteResponse.Error = getRemoteSignerError(fmt.Errorf("vote is required"))
-		return cometprotoprivval.Message{Sum: msgSum}
+		return cometprotoprivval.Message{Sum: msgSum}, false
 	}
 	if vote.Type != cometproto.PrevoteType && vote.Type != cometproto.PrecommitType {
 		msgSum.SignedVoteResponse.Error = getRemoteSignerError(fmt.Errorf("unexpected vote type: %v", vote.Type))
-		return cometprotoprivval.Message{Sum: msgSum}
+		return cometprotoprivval.Message{Sum: msgSum}, false
 	}
 
-	sig, voteExtSig, timestamp, err := rs.signWithTimeout(chainID, VoteToBlock(chainID, vote))
+	sig, voteExtSig, timestamp, err := rs.signWithTimeout(ctx, chainID, VoteToBlock(chainID, vote))
 	if err != nil {
+		if abandonSign(err) {
+			rs.Logger.Error(
+				"Sign vote request not completed in time, dropping connection so the node retries",
+				"chain_id", chainID,
+				"height", vote.Height,
+				"round", vote.Round,
+				"err", err,
+			)
+			return cometprotoprivval.Message{}, true
+		}
 		msgSum.SignedVoteResponse.Error = getRemoteSignerError(err)
-		return cometprotoprivval.Message{Sum: msgSum}
+		return cometprotoprivval.Message{Sum: msgSum}, false
 	}
 
 	// Echo the full request vote with only the signer-owned fields replaced: a
@@ -419,13 +487,14 @@ func (rs *ReconnRemoteSigner) handleSignVoteRequest(chainID string, vote *cometp
 	msgSum.SignedVoteResponse.Vote.Timestamp = timestamp
 	msgSum.SignedVoteResponse.Vote.Signature = sig
 	msgSum.SignedVoteResponse.Vote.ExtensionSignature = voteExtSig
-	return cometprotoprivval.Message{Sum: msgSum}
+	return cometprotoprivval.Message{Sum: msgSum}, false
 }
 
 func (rs *ReconnRemoteSigner) handleSignProposalRequest(
+	ctx context.Context,
 	chainID string,
 	proposal *cometproto.Proposal,
-) cometprotoprivval.Message {
+) (cometprotoprivval.Message, bool) {
 	msgSum := &cometprotoprivval.Message_SignedProposalResponse{
 		SignedProposalResponse: &cometprotoprivval.SignedProposalResponse{
 			Proposal: cometproto.Proposal{},
@@ -435,17 +504,27 @@ func (rs *ReconnRemoteSigner) handleSignProposalRequest(
 
 	if err := ValidateChainID(chainID); err != nil {
 		msgSum.SignedProposalResponse.Error = getRemoteSignerError(err)
-		return cometprotoprivval.Message{Sum: msgSum}
+		return cometprotoprivval.Message{Sum: msgSum}, false
 	}
 	if proposal == nil {
 		msgSum.SignedProposalResponse.Error = getRemoteSignerError(fmt.Errorf("proposal is required"))
-		return cometprotoprivval.Message{Sum: msgSum}
+		return cometprotoprivval.Message{Sum: msgSum}, false
 	}
 
-	signature, _, timestamp, err := rs.signWithTimeout(chainID, ProposalToBlock(chainID, proposal))
+	signature, _, timestamp, err := rs.signWithTimeout(ctx, chainID, ProposalToBlock(chainID, proposal))
 	if err != nil {
+		if abandonSign(err) {
+			rs.Logger.Error(
+				"Sign proposal request not completed in time, dropping connection so the node retries",
+				"chain_id", chainID,
+				"height", proposal.Height,
+				"round", proposal.Round,
+				"err", err,
+			)
+			return cometprotoprivval.Message{}, true
+		}
 		msgSum.SignedProposalResponse.Error = getRemoteSignerError(err)
-		return cometprotoprivval.Message{Sum: msgSum}
+		return cometprotoprivval.Message{Sum: msgSum}, false
 	}
 
 	// Same echo contract as the vote response: return the request proposal with
@@ -453,7 +532,7 @@ func (rs *ReconnRemoteSigner) handleSignProposalRequest(
 	msgSum.SignedProposalResponse.Proposal = *proposal
 	msgSum.SignedProposalResponse.Proposal.Timestamp = timestamp
 	msgSum.SignedProposalResponse.Proposal.Signature = signature
-	return cometprotoprivval.Message{Sum: msgSum}
+	return cometprotoprivval.Message{Sum: msgSum}, false
 }
 
 func (rs *ReconnRemoteSigner) handlePubKeyRequest(chainID string) cometprotoprivval.Message {
