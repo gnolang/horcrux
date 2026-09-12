@@ -209,5 +209,6 @@ func (cosigner *RemoteCosigner) Sign(
 	return &CosignerSignBlockResponse{
 		Signature:              res.Signature,
 		VoteExtensionSignature: res.VoteExtSignature,
+		Timestamp:              time.Unix(0, res.Timestamp),
 	}, nil
 }
