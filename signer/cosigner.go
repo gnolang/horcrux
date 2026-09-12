@@ -117,6 +117,11 @@ type CosignerSignBlockRequest struct {
 type CosignerSignBlockResponse struct {
 	Signature              []byte
 	VoteExtensionSignature []byte
+	// Timestamp is the timestamp the returned signature was made over. It can
+	// differ from the timestamp in the request when the leader answered from an
+	// existing signature for the same HRS, so a proxying cosigner must pass this
+	// back to the chain node instead of the timestamp it asked with.
+	Timestamp time.Time
 }
 type CosignerUUIDNonces struct {
 	UUID   uuid.UUID
