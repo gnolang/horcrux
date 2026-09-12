@@ -27,8 +27,13 @@ import (
 )
 
 const (
-	testChain        = "gaia" // ghcr.io/strangelove-ventures/heighliner/gaia
+	testChain = "gaia"
+	// testChainImage is a mirror of heighliner's gaia image: the
+	// strangelove-ventures registry denies anonymous pulls, so CI pulls the
+	// copy hosted in the gno organization instead.
+	testChainImage   = "ghcr.io/gnolang/heighliner/gaia"
 	testChainVersion = "v10.0.2"
+	testChainUidGid  = "1025:1025"
 
 	signerPort       = "2222"
 	signerPortDocker = signerPort + "/tcp"
@@ -81,6 +86,11 @@ func startChains(
 			NumValidators: &c.totalValidators,
 			NumFullNodes:  &c.totalSentries,
 			ChainConfig: ibc.ChainConfig{
+				Images: []ibc.DockerImage{{
+					Repository: testChainImage,
+					Version:    testChainVersion,
+					UidGid:     testChainUidGid,
+				}},
 				ModifyGenesis: c.modifyGenesis,
 				PreGenesis:    preGenesis,
 				ConfigFileOverrides: map[string]any{
