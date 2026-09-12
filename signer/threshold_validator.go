@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/cometbft/cometbft/libs/log"
+	"github.com/cometbft/cometbft/libs/protoio"
+	cometproto "github.com/cometbft/cometbft/proto/tendermint/types"
 	cometrpcjsontypes "github.com/cometbft/cometbft/rpc/jsonrpc/types"
 	"github.com/google/uuid"
 	"github.com/strangelove-ventures/horcrux/v3/signer/proto"
@@ -166,7 +168,9 @@ func (pv *ThresholdValidator) SaveLastSignedStateInitiated(
 
 	if _, ok := err.(*SameHRSError); !ok {
 		if sameBlockErr == nil {
-			return existingSignature, existingVoteExtSignature, block.Timestamp, nil
+			// existingTimestamp, not the requested one: the signature returned here can
+			// be an existing one made over a different timestamp.
+			return existingSignature, existingVoteExtSignature, existingTimestamp, nil
 		}
 		return nil, nil, existingTimestamp, pv.newBeyondBlockError(chainID, block.HRSKey())
 	}
@@ -459,8 +463,38 @@ func (pv *ThresholdValidator) compareBlockSignatureAgainstSSC(
 		return nil, nil, stamp, err
 	}
 
-	// only differ by timestamp, okay to sign again
-	return nil, nil, stamp, nil
+	// Only differ by timestamp: return the existing signature and the timestamp it
+	// was made over instead of signing again. Signing again yields a second, equally
+	// valid signature over the same height/round/step, which every peer that already
+	// holds the first one rejects as ErrVoteNonDeterministicSignature. This mirrors
+	// what a chain node's own file-based signer does with its state file
+	// (CometBFT FilePV.signVote / gno.land tm2 PrivValidator.SignVote): reuse the
+	// last signature and its timestamp.
+	existingStamp, err := signBytesTimestamp(existingSignature.Step, existingSignature.SignBytes)
+	if err != nil {
+		return nil, nil, stamp, err
+	}
+
+	return existingSignature.Signature, existingSignature.VoteExtensionSignature, existingStamp, nil
+}
+
+// signBytesTimestamp returns the timestamp a set of canonical sign bytes was signed over.
+func signBytesTimestamp(step int8, signBytes []byte) (time.Time, error) {
+	if step == stepPropose {
+		var proposal cometproto.CanonicalProposal
+		if err := protoio.UnmarshalDelimited(signBytes, &proposal); err != nil {
+			return time.Time{}, newUnmarshalError("signBytes", "proposal", err)
+		}
+
+		return proposal.Timestamp, nil
+	}
+
+	var vote cometproto.CanonicalVote
+	if err := protoio.UnmarshalDelimited(signBytes, &vote); err != nil {
+		return time.Time{}, newUnmarshalError("signBytes", "vote", err)
+	}
+
+	return vote.Timestamp, nil
 }
 
 // compareBlockSignatureAgainstHRS returns a BeyondBlockError if the hrs is greater than the
@@ -638,7 +672,10 @@ func (pv *ThresholdValidator) proxyIfNecessary(
 		}
 		return true, nil, nil, stamp, err
 	}
-	return true, signRes.Signature, signRes.VoteExtensionSignature, stamp, nil
+	// The leader may have answered from an existing signature for this HRS, which
+	// is made over its timestamp, not ours. Return the leader's timestamp so the
+	// chain node stamps the vote the signature actually covers.
+	return true, signRes.Signature, signRes.VoteExtensionSignature, signRes.Timestamp, nil
 }
 
 func (pv *ThresholdValidator) Sign(
