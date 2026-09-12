@@ -89,18 +89,25 @@ func (cosigner *RemoteCosigner) VerifySignature(_ string, _, _ []byte) bool {
 	return false
 }
 
-func getGRPCClient(address string, tlsConfig *tls.Config) (proto.CosignerClient, error) {
-	var grpcAddress string
-	url, err := url.Parse(address)
-	if err != nil {
-		grpcAddress = address
-	} else {
+// peerGRPCTarget converts a peer cosigner address into a gRPC target with
+// passthrough resolution: the hostname is resolved by the dialer on every
+// connection attempt. The default dns resolver waits at least 30 seconds
+// between re-resolutions (MinResolutionInterval), so a peer that comes back
+// with a new IP after a restart stays unreachable well past its downtime.
+func peerGRPCTarget(address string) string {
+	grpcAddress := address
+	if url, err := url.Parse(address); err == nil {
 		grpcAddress = url.Host
 	}
+	return "passthrough:///" + grpcAddress
+}
+
+func getGRPCClient(address string, tlsConfig *tls.Config) (proto.CosignerClient, error) {
 	conn, err := grpc.NewClient(
-		grpcAddress,
+		peerGRPCTarget(address),
 		grpc.WithTransportCredentials(ClusterTransportCreds(tlsConfig)),
 		grpc.WithKeepaliveParams(peerKeepalive()),
+		grpc.WithLocalDNSResolution(),
 	)
 	if err != nil {
 		return nil, err
