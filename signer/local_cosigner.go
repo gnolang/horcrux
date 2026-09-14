@@ -245,10 +245,17 @@ func (cosigner *LocalCosigner) sign(req CosignerSignRequest) (CosignerSignRespon
 
 	existingSignature, err := ccs.lastSignState.existingSignatureOrErrorIfRegression(hrst, req.SignBytes)
 	if err != nil && hasVoteExtensions {
-		// A delayed extension request may refer to an older, already signed vote.
-		// Only reuse an exact cached vote; never sign an older vote anew.
-		_, cached := ccs.lastSignState.GetFromCache(hrst.HRSKey())
-		if cached != nil && cached.Signature != nil && bytes.Equal(cached.SignBytes, req.SignBytes) {
+		// A delayed extension request may refer to an already signed vote the
+		// watermark has moved past, when another sentry drove the round forward
+		// while this one retried. Only reuse an exact cached vote, and only within
+		// the height the cosigner is on: the extension itself is opaque application
+		// bytes this cosigner cannot check, so signing one is bounded to the height
+		// it is already voting at, which a request for a fresh vote reaches anyway.
+		// Never sign an older vote anew.
+		latest, cached := ccs.lastSignState.GetFromCache(hrst.HRSKey())
+		if cached != nil && cached.Signature != nil &&
+			hrst.Height == latest.Height &&
+			bytes.Equal(cached.SignBytes, req.SignBytes) {
 			existingSignature, err = cached.Signature, nil
 		}
 	}
