@@ -41,13 +41,14 @@ func (rpc *CosignerGRPCServer) SignBlock(
 	if req.Block == nil {
 		return nil, fmt.Errorf("block is required")
 	}
-	sig, voteExtSig, _, err := rpc.thresholdValidator.Sign(ctx, req.ChainID, BlockFromProto(req.Block))
+	sig, voteExtSig, stamp, err := rpc.thresholdValidator.Sign(ctx, req.ChainID, BlockFromProto(req.Block))
 	if err != nil {
 		return nil, err
 	}
 	return &proto.SignBlockResponse{
 		Signature:        sig,
 		VoteExtSignature: voteExtSig,
+		Timestamp:        stamp.UnixNano(),
 	}, nil
 }
 

@@ -275,63 +275,37 @@ func testThresholdValidator(t *testing.T, threshold, total uint8) {
 
 		newValidator.nonceCache.LoadN(ctx, mrand.Intn(7)) //nolint:gosec
 
-		eg.Go(func() error {
-			start := time.Now()
-			t.Log("Sign time", "duration", time.Since(start))
-			block := VoteToBlock(testChainID, &precommit)
-			sig, voteExtSig, _, err := newValidator.Sign(ctx, testChainID, block)
-			if err != nil {
-				return err
-			}
+		// A chain node stamps its vote with the timestamp the signer returns, so the
+		// signature must be verified over the vote as the signer returned it: a
+		// request that only differs from an already signed one by its timestamp is
+		// answered with the existing signature and the timestamp it was made over.
+		signAndVerify := func(vote cometproto.Vote) func() error {
+			return func() error {
+				start := time.Now()
+				sig, voteExtSig, stamp, err := newValidator.Sign(ctx, testChainID, VoteToBlock(testChainID, &vote))
+				t.Log("Sign time", "duration", time.Since(start))
+				if err != nil {
+					return err
+				}
 
-			if !pubKey.VerifySignature(block.SignBytes, sig) {
-				return fmt.Errorf("signature verification failed")
-			}
+				vote.Timestamp = stamp
+				block := VoteToBlock(testChainID, &vote)
 
-			if !pubKey.VerifySignature(block.VoteExtensionSignBytes, voteExtSig) {
-				return fmt.Errorf("vote extension signature verification failed")
-			}
+				if !pubKey.VerifySignature(block.SignBytes, sig) {
+					return fmt.Errorf("signature verification failed")
+				}
 
-			return nil
-		})
-		eg.Go(func() error {
-			start := time.Now()
-			t.Log("Sign time", "duration", time.Since(start))
-			block := VoteToBlock(testChainID, &precommitClone)
-			sig, voteExtSig, _, err := newValidator.Sign(ctx, testChainID, block)
-			if err != nil {
-				return err
-			}
+				if !pubKey.VerifySignature(block.VoteExtensionSignBytes, voteExtSig) {
+					return fmt.Errorf("vote extension signature verification failed")
+				}
 
-			if !pubKey.VerifySignature(block.SignBytes, sig) {
-				return fmt.Errorf("signature verification failed")
+				return nil
 			}
+		}
 
-			if !pubKey.VerifySignature(block.VoteExtensionSignBytes, voteExtSig) {
-				return fmt.Errorf("vote extension signature verification failed")
-			}
-
-			return nil
-		})
-		eg.Go(func() error {
-			start := time.Now()
-			block := VoteToBlock(testChainID, &precommitClone2)
-			sig, voteExtSig, _, err := newValidator.Sign(ctx, testChainID, block)
-			t.Log("Sign time", "duration", time.Since(start))
-			if err != nil {
-				return err
-			}
-
-			if !pubKey.VerifySignature(block.SignBytes, sig) {
-				return fmt.Errorf("signature verification failed")
-			}
-
-			if !pubKey.VerifySignature(block.VoteExtensionSignBytes, voteExtSig) {
-				return fmt.Errorf("vote extension signature verification failed")
-			}
-
-			return nil
-		})
+		eg.Go(signAndVerify(precommit))
+		eg.Go(signAndVerify(precommitClone))
+		eg.Go(signAndVerify(precommitClone2))
 
 		err = eg.Wait()
 		require.NoError(t, err)

@@ -206,8 +206,16 @@ func (cosigner *RemoteCosigner) Sign(
 	if err != nil {
 		return nil, err
 	}
+	// Older leaders leave the response timestamp unset. Preserve the request
+	// timestamp in that case, as the proxy did before timestamp propagation.
+	// A populated timestamp may belong to a cached signature and must be kept.
+	timestamp := req.Block.Timestamp
+	if res.Timestamp != 0 {
+		timestamp = time.Unix(0, res.Timestamp)
+	}
 	return &CosignerSignBlockResponse{
 		Signature:              res.Signature,
 		VoteExtensionSignature: res.VoteExtSignature,
+		Timestamp:              timestamp,
 	}, nil
 }

@@ -29,6 +29,52 @@ Each block sign request (votes and proposals) from any connected sentry node(s),
 - For the sentry nodes, the cluster needs at least one sentry that is in sync with the chain and connected to a signer node that is up and participating in the raft cluster. E.g. if the signer cluster is operational, for a 3 sentry configuration, 2 sentries can have failures and the validator will continue signing blocks.
 - For the horcrux signer nodes, the cluster needs at least the threshold number of signer nodes to be up and connected to each other via the raft protocol and be able to reach those same signer nodes via the p2p (RPC) port. E.g. if horcrux is configured as 3 signer nodes, and the private key is sharded into 3 pieces with threshold 2, then 2 signer nodes must be operational for the validator to continue signing blocks.
 
+### Proxied signing and rolling upgrades
+
+A signer node that is not the raft leader proxies the sign request to the leader
+and relays back the timestamp the leader signed over. A leader running a build
+older than this one does not send one, so the proxy falls back to the timestamp
+the chain node requested. That is correct whenever the leader signs afresh, but
+not when it answers from an existing signature made over a different timestamp:
+the node then stamps its vote with a timestamp the signature does not cover, and
+peers reject the vote. Upgrade every signer node that can win a raft election to
+close that window.
+
+### Repeated votes and vote extensions
+
+For a cached vote at the same height, round, and step, requests that differ only
+in timestamp receive the existing vote signature and the timestamp it covers.
+Requests for a conflicting block are refused.
+
+CometBFT vote extensions are signed separately. A sentry may request a different
+extension for the same vote, including after a restart. Horcrux reuses a cached
+extension signature only if it verifies against the requested extension;
+otherwise, it obtains fresh nonces and a threshold signature for that extension.
+The original vote signature and timestamp stay unchanged. An extension-signing
+failure does not discard the cached vote, so the sentry can retry.
+
+The extension round draws any threshold of cosigners, and each one re-checks the
+original vote against its own signing state before signing the extension. A
+cosigner that sat out the original vote signs it at that point and its vote share
+is discarded. A cosigner that both sat out the vote and has moved past its height
+has nothing to check against and refuses, which fails that retry; the vote stays
+cached, so a later retry over a different set of cosigners succeeds.
+
+Signing an extension is bounded to the height a cosigner is on. A retry is served
+while the watermark has moved past the vote within its height — another sentry
+driving the round forward, say — but not once it has moved to a later height, even
+though the vote is still cached there. An extension is opaque application data a
+cosigner cannot check, so serving one for a decided block would let a leader obtain
+a threshold signature over extension bytes of its choosing for that block; bounding
+it to the current height grants nothing a request for a fresh vote does not already
+reach. A sentry a height behind is answered with a refusal, not a dropped
+connection: no retry of it can succeed. Its vote signature stays cached and served.
+
+Upgrade all cosigners before relying on retries with changed extensions. Older
+cosigners may return a cached vote share without an extension share; those
+responses cause the extension retry to fail. No signing-state migration is needed.
+Gnoland/tm2 does not use vote extensions.
+
 ### Threshold Validator Signing Process
 
 The signer node that is the current elected raft leader will act upon the sign requests by managing the threshold validation process:
