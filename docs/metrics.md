@@ -73,6 +73,14 @@ Watch 'signer_missed_ephemeral_shares' which will note when the leader is not ab
 
 Each block, Nonce Secrets are shared between Cosigners.  Monitoring 'signer_seconds_since_last_local_ephemeral_share_time' and ensuring it does not exceed the block time will allow you to know when a Cosigner was not contacted for a block.
 
+## Watching Vote Extension Re-signing
+
+'signer_total_vote_extension_resigns' counts the times a sentry asked for a vote
+horcrux had already signed but with a different vote extension, so horcrux signed
+that extension again under fresh nonces. A low rate is normal after a sentry
+restart. A rate approaching one per block points at a sentry that keeps retrying,
+and each re-sign consumes an extra pair of nonce rounds.
+
 ## Metrics that don't always correspond to block time
 There is no guarantee that a Cosigner will sign a block if the threshold is reached early.  You may watch 'signer_seconds_since_last_local_sign_start_time' but there is no guarantee that 'signer_seconds_since_last_local_sign_finish_time' will be reached since there are multiple sanity checks that may cause an early exit in some circumstances (rather rare)
 

@@ -1,6 +1,7 @@
 package signer
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -243,13 +244,16 @@ func (cosigner *LocalCosigner) sign(req CosignerSignRequest) (CosignerSignRespon
 	metricsTimeKeeper.SetPreviousLocalSignStart(time.Now())
 
 	existingSignature, err := ccs.lastSignState.existingSignatureOrErrorIfRegression(hrst, req.SignBytes)
+	if err != nil && hasVoteExtensions {
+		// A delayed extension request may refer to an older, already signed vote.
+		// Only reuse an exact cached vote; never sign an older vote anew.
+		_, cached := ccs.lastSignState.GetFromCache(hrst.HRSKey())
+		if cached != nil && cached.Signature != nil && bytes.Equal(cached.SignBytes, req.SignBytes) {
+			existingSignature, err = cached.Signature, nil
+		}
+	}
 	if err != nil {
 		return res, err
-	}
-
-	if existingSignature != nil {
-		res.Signature = existingSignature
-		return res, nil
 	}
 
 	defer func() {
@@ -258,6 +262,28 @@ func (cosigner *LocalCosigner) sign(req CosignerSignRequest) (CosignerSignRespon
 		delete(cosigner.nonces, req.VoteExtUUID)
 		cosigner.noncesMu.Unlock()
 	}()
+
+	if existingSignature != nil {
+		res.Signature = existingSignature
+		if hasVoteExtensions {
+			// Extensions may change while the vote stays identical. Sign the
+			// requested extension under fresh nonces, leaving the vote state intact.
+			nonces, err := cosigner.combinedNonces(
+				cosigner.GetID(),
+				//nolint:gosec // threshold is bounded by the shard count, a uint8 in the cosigner protocol
+				uint8(cosigner.config.Config.ThresholdModeConfig.Threshold),
+				req.VoteExtUUID,
+			)
+			if err != nil {
+				return CosignerSignResponse{}, err
+			}
+			res.VoteExtensionSignature, err = ccs.signer.Sign(nonces, req.VoteExtensionSignBytes)
+			if err != nil {
+				return CosignerSignResponse{}, err
+			}
+		}
+		return res, nil
+	}
 
 	nonces, err := cosigner.combinedNonces(
 		cosigner.GetID(),

@@ -40,6 +40,31 @@ the node then stamps its vote with a timestamp the signature does not cover, and
 peers reject the vote. Upgrade every signer node that can win a raft election to
 close that window.
 
+### Repeated votes and vote extensions
+
+For a cached vote at the same height, round, and step, requests that differ only
+in timestamp receive the existing vote signature and the timestamp it covers.
+Requests for a conflicting block are refused.
+
+CometBFT vote extensions are signed separately. A sentry may request a different
+extension for the same vote, including after a restart. Horcrux reuses a cached
+extension signature only if it verifies against the requested extension;
+otherwise, it obtains fresh nonces and a threshold signature for that extension.
+The original vote signature and timestamp stay unchanged. An extension-signing
+failure does not discard the cached vote, so the sentry can retry.
+
+The extension round draws any threshold of cosigners, and each one re-checks the
+original vote against its own signing state before signing the extension. A
+cosigner that sat out the original vote signs it at that point and its vote share
+is discarded. A cosigner that both sat out the vote and has moved past its height
+has nothing to check against and refuses, which fails that retry; the vote stays
+cached, so a later retry over a different set of cosigners succeeds.
+
+Upgrade all cosigners before relying on retries with changed extensions. Older
+cosigners may return a cached vote share without an extension share; those
+responses cause the extension retry to fail. No signing-state migration is needed.
+Gnoland/tm2 does not use vote extensions.
+
 ### Threshold Validator Signing Process
 
 The signer node that is the current elected raft leader will act upon the sign requests by managing the threshold validation process:
