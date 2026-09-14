@@ -170,7 +170,7 @@ func TestThresholdValidatorVoteExtensionFailurePreservesVote(t *testing.T) {
 
 func TestThresholdValidatorVoteExtensionAfterStateChange(t *testing.T) {
 	for _, restart := range []bool{false, true} {
-		name := "after advancing height"
+		name := "after advancing the round"
 		if restart {
 			name = "after reloading persisted state"
 		}
@@ -189,8 +189,10 @@ func TestThresholdValidatorVoteExtensionAfterStateChange(t *testing.T) {
 				}
 				require.NoError(t, validator.LoadSignStateIfNecessary(testChainID))
 			} else {
+				// Another sentry drives the round forward while this one retries.
+				// The watermark moves past the vote, but stays within its height.
 				next := vote
-				next.Height++
+				next.Round++
 				_, _, _, err := validator.Sign(ctx, testChainID, VoteToBlock(testChainID, &next))
 				require.NoError(t, err)
 			}
@@ -445,4 +447,43 @@ func TestLocalCosignerVoteExtensionRefusedAfterRegression(t *testing.T) {
 		_, err := signers[i].SetNoncesAndSign(ctx, req)
 		require.Error(t, err, "cosigner %d must refuse an extension for a vote it never made", signers[i].GetID())
 	}
+}
+
+// Signing an extension is bounded to the height the cosigner is on. The extension
+// is opaque application data a cosigner cannot check, so serving one for a height
+// it has already moved past would let a leader obtain a threshold signature over
+// extension bytes of its choosing for a block that is already decided -- something
+// a request for a fresh vote at the current height cannot reach. The vote itself is
+// still cached and still refused for anything but an exact match.
+func TestThresholdValidatorVoteExtensionRefusedAfterHeightAdvance(t *testing.T) {
+	validator, _, _ := newVoteExtensionTestValidator(t)
+	ctx := context.Background()
+
+	vote := voteWithExtension("first")
+	sig, _, stamp, err := validator.Sign(ctx, testChainID, VoteToBlock(testChainID, &vote))
+	require.NoError(t, err)
+	vote.Timestamp = stamp
+
+	next := vote
+	next.Height++
+	_, _, _, err = validator.Sign(ctx, testChainID, VoteToBlock(testChainID, &next))
+	require.NoError(t, err)
+
+	// Same vote, changed extension, now a height behind the watermark.
+	retry := vote
+	retry.Extension = []byte("second")
+	_, _, _, err = validator.Sign(ctx, testChainID, VoteToBlock(testChainID, &retry))
+	require.Error(t, err, "an extension for a passed height must not be signed")
+	// The height has passed, so no retry can ever succeed: answer the sentry with a
+	// terminal refusal rather than dropping the connection for it to try again.
+	require.True(t, signRefusal(err), "a passed height is a refusal, not a transient failure")
+	var heightRegression *HeightRegressionError
+	require.ErrorAs(t, err, &heightRegression)
+
+	// The vote signature for that height is unchanged and still served.
+	unchanged := vote
+	resig, _, restamp, err := validator.Sign(ctx, testChainID, VoteToBlock(testChainID, &unchanged))
+	require.NoError(t, err)
+	require.Equal(t, sig, resig)
+	require.True(t, stamp.Equal(restamp))
 }

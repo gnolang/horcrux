@@ -60,6 +60,16 @@ is discarded. A cosigner that both sat out the vote and has moved past its heigh
 has nothing to check against and refuses, which fails that retry; the vote stays
 cached, so a later retry over a different set of cosigners succeeds.
 
+Signing an extension is bounded to the height a cosigner is on. A retry is served
+while the watermark has moved past the vote within its height — another sentry
+driving the round forward, say — but not once it has moved to a later height, even
+though the vote is still cached there. An extension is opaque application data a
+cosigner cannot check, so serving one for a decided block would let a leader obtain
+a threshold signature over extension bytes of its choosing for that block; bounding
+it to the current height grants nothing a request for a fresh vote does not already
+reach. A sentry a height behind is answered with a refusal, not a dropped
+connection: no retry of it can succeed. Its vote signature stays cached and served.
+
 Upgrade all cosigners before relying on retries with changed extensions. Older
 cosigners may return a cached vote share without an extension share; those
 responses cause the extension retry to fail. No signing-state migration is needed.
