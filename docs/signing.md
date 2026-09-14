@@ -29,6 +29,17 @@ Each block sign request (votes and proposals) from any connected sentry node(s),
 - For the sentry nodes, the cluster needs at least one sentry that is in sync with the chain and connected to a signer node that is up and participating in the raft cluster. E.g. if the signer cluster is operational, for a 3 sentry configuration, 2 sentries can have failures and the validator will continue signing blocks.
 - For the horcrux signer nodes, the cluster needs at least the threshold number of signer nodes to be up and connected to each other via the raft protocol and be able to reach those same signer nodes via the p2p (RPC) port. E.g. if horcrux is configured as 3 signer nodes, and the private key is sharded into 3 pieces with threshold 2, then 2 signer nodes must be operational for the validator to continue signing blocks.
 
+### Proxied signing and rolling upgrades
+
+A signer node that is not the raft leader proxies the sign request to the leader
+and relays back the timestamp the leader signed over. A leader running a build
+older than this one does not send one, so the proxy falls back to the timestamp
+the chain node requested. That is correct whenever the leader signs afresh, but
+not when it answers from an existing signature made over a different timestamp:
+the node then stamps its vote with a timestamp the signature does not cover, and
+peers reject the vote. Upgrade every signer node that can win a raft election to
+close that window.
+
 ### Threshold Validator Signing Process
 
 The signer node that is the current elected raft leader will act upon the sign requests by managing the threshold validation process:
