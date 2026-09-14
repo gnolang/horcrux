@@ -678,6 +678,104 @@ func (pv *ThresholdValidator) proxyIfNecessary(
 	return true, signRes.Signature, signRes.VoteExtensionSignature, signRes.Timestamp, nil
 }
 
+// voteExtensionNonces draws the two nonce rounds a vote extension retry needs,
+// preferring the prepared cache. Going straight to getNoncesFallback would make
+// every retry look like a drained cache to the operator's metrics.
+func (pv *ThresholdValidator) voteExtensionNonces(ctx context.Context) (*CosignersAndNonces, error) {
+	fastest := pv.cosignerHealth.GetFastest()
+	if len(fastest) >= pv.threshold-1 {
+		cosigners := make(Cosigners, pv.threshold)
+		cosigners[0] = pv.myCosigner
+		copy(cosigners[1:], fastest[:pv.threshold-1])
+
+		if voteNonces, err := pv.nonceCache.GetNonces(cosigners); err == nil {
+			// The vote round is spent even if the extension round is missing: a
+			// nonce must never be offered twice.
+			if extNonces, err := pv.nonceCache.GetNonces(cosigners); err == nil {
+				return &CosignersAndNonces{
+					Cosigners: cosigners,
+					Nonces:    CosignerUUIDNoncesMultiple{voteNonces, extNonces},
+				}, nil
+			}
+		}
+	}
+
+	return pv.getNoncesFallback(ctx, 2)
+}
+
+// signVoteExtension signs an extension for a vote whose full signature is already
+// cached. The existing RPC carries the original vote as well so each cosigner
+// still checks its signing state before signing the extension. Cached vote shares
+// may come from different nonce rounds, so only extension shares are combined.
+// An error here must not replace the completed vote with a failed-sign marker.
+func (pv *ThresholdValidator) signVoteExtension(
+	ctx context.Context,
+	chainID string,
+	block Block,
+	stamp time.Time,
+) ([]byte, error) {
+	var vote cometproto.CanonicalVote
+	if err := protoio.UnmarshalDelimited(block.SignBytes, &vote); err != nil {
+		return nil, newUnmarshalError("signBytes", "vote", err)
+	}
+	vote.Timestamp = stamp
+	signBytes, err := protoio.MarshalDelimited(&vote)
+	if err != nil {
+		return nil, fmt.Errorf("marshalling cached vote: %w", err)
+	}
+
+	// Keep distinct nonce rounds for the vote and extension. A cosigner that
+	// missed the original vote may need to sign it before it can sign the extension.
+	// Its vote share is discarded; the caller keeps the cached full vote signature.
+	nonces, err := pv.voteExtensionNonces(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("getting vote extension nonces: %w", err)
+	}
+	// A peer that answers with fewer rounds than requested must not index out of
+	// range: a panic here takes down a signer that is otherwise healthy.
+	if len(nonces.Nonces) < 2 {
+		return nil, fmt.Errorf("got %d nonce rounds for vote extension, need 2", len(nonces.Nonces))
+	}
+
+	shares := make([]PartialSignature, len(nonces.Cosigners))
+	var eg errgroup.Group
+	for i, cosigner := range nonces.Cosigners {
+		eg.Go(func() error {
+			signCtx, cancel := context.WithTimeout(ctx, pv.grpcTimeout)
+			defer cancel()
+			res, err := cosigner.SetNoncesAndSign(signCtx, CosignerSetNoncesAndSignRequest{
+				ChainID: chainID,
+				HRST: HRSTKey{
+					Height: block.Height, Round: block.Round, Step: block.Step, Timestamp: stamp.UnixNano(),
+				},
+				SignBytes:              signBytes,
+				Nonces:                 nonces.Nonces[0].For(cosigner.GetID()),
+				VoteExtensionSignBytes: block.VoteExtensionSignBytes,
+				VoteExtensionNonces:    nonces.Nonces[1].For(cosigner.GetID()),
+			})
+			if err != nil {
+				return fmt.Errorf("cosigner %d signing vote extension: %w", cosigner.GetID(), err)
+			}
+			if len(res.VoteExtensionSignature) == 0 {
+				return fmt.Errorf("cosigner %d returned no vote extension signature", cosigner.GetID())
+			}
+			shares[i] = PartialSignature{ID: cosigner.GetID(), Signature: res.VoteExtensionSignature}
+			return nil
+		})
+	}
+	if err := eg.Wait(); err != nil {
+		return nil, err
+	}
+	signature, err := pv.myCosigner.CombineSignatures(chainID, shares)
+	if err != nil {
+		return nil, fmt.Errorf("combining vote extension signatures: %w", err)
+	}
+	if !pv.myCosigner.VerifySignature(chainID, block.VoteExtensionSignBytes, signature) {
+		return nil, errors.New("combined signature for vote extension is not valid")
+	}
+	return signature, nil
+}
+
 func (pv *ThresholdValidator) Sign(
 	ctx context.Context,
 	chainID string,
@@ -724,6 +822,24 @@ func (pv *ThresholdValidator) Sign(
 	}
 	if existingSignature != nil {
 		log.Debug("Returning existing signature", "signature", fmt.Sprintf("%x", existingSignature))
+		_, hasVoteExtensions, err := verifySignPayload(chainID, signBytes, voteExtensionSignBytes)
+		if err != nil {
+			return nil, nil, stamp, fmt.Errorf("failed to verify payload: %w", err)
+		}
+		if !hasVoteExtensions {
+			return existingSignature, nil, existingTimestamp, nil
+		}
+		// The vote cache does not identify the extension. Reuse its extension
+		// signature only if it verifies against the extension in this request.
+		if !pv.myCosigner.VerifySignature(chainID, voteExtensionSignBytes, existingVoteExtSig) {
+			log.Debug("Signing a changed vote extension for an already signed vote")
+			totalVoteExtensionResigns.WithLabelValues(chainID).Inc()
+			existingVoteExtSig, err = pv.signVoteExtension(ctx, chainID, block, existingTimestamp)
+			if err != nil {
+				log.Error("Failed to sign changed vote extension", "err", err.Error())
+				return nil, nil, stamp, err
+			}
+		}
 		return existingSignature, existingVoteExtSig, existingTimestamp, nil
 	}
 

@@ -140,6 +140,14 @@ var (
 		},
 		[]string{"chain_id"},
 	)
+	totalVoteExtensionResigns = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "signer_total_vote_extension_resigns",
+			Help: "Total Vote Extensions Signed Again For An Already Signed Vote " +
+				"(High count may indicate sentry restarts or retries)",
+		},
+		[]string{"chain_id"},
+	)
 	totalProposalsSigned = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "signer_total_proposals_signed",
