@@ -453,9 +453,18 @@ func (pv *ThresholdValidator) compareBlockSignatureAgainstSSC(
 		}
 	}
 
+	// An existing signature is never paired with the requested timestamp: the chain
+	// node stamps its message with whatever the signer returns, so the timestamp has
+	// to be the one the existing signature was made over. They are the same when the
+	// payloads are identical, and differ for the two cases below.
+	existingStamp, err := signBytesTimestamp(existingSignature.Step, existingSignature.SignBytes)
+	if err != nil {
+		return nil, nil, stamp, err
+	}
+
 	// If a proposal has already been signed for this HRS, or the sign payload is identical, return the existing signature.
 	if block.Step == stepPropose || bytes.Equal(signBytes, existingSignature.SignBytes) {
-		return existingSignature.Signature, existingSignature.VoteExtensionSignature, block.Timestamp, nil
+		return existingSignature.Signature, existingSignature.VoteExtensionSignature, existingStamp, nil
 	}
 
 	// If there is a difference in the existing signature payload other than timestamp, return that error.
@@ -463,18 +472,12 @@ func (pv *ThresholdValidator) compareBlockSignatureAgainstSSC(
 		return nil, nil, stamp, err
 	}
 
-	// Only differ by timestamp: return the existing signature and the timestamp it
-	// was made over instead of signing again. Signing again yields a second, equally
-	// valid signature over the same height/round/step, which every peer that already
-	// holds the first one rejects as ErrVoteNonDeterministicSignature. This mirrors
-	// what a chain node's own file-based signer does with its state file
-	// (CometBFT FilePV.signVote / gno.land tm2 PrivValidator.SignVote): reuse the
-	// last signature and its timestamp.
-	existingStamp, err := signBytesTimestamp(existingSignature.Step, existingSignature.SignBytes)
-	if err != nil {
-		return nil, nil, stamp, err
-	}
-
+	// Only differ by timestamp: return the existing signature instead of signing
+	// again. Signing again yields a second, equally valid signature over the same
+	// height/round/step, which every peer that already holds the first one rejects
+	// as ErrVoteNonDeterministicSignature. This mirrors what a chain node's own
+	// file-based signer does with its state file (CometBFT FilePV.signVote /
+	// gno.land tm2 PrivValidator.SignVote): reuse the last signature and its timestamp.
 	return existingSignature.Signature, existingSignature.VoteExtensionSignature, existingStamp, nil
 }
 
