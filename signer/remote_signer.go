@@ -522,10 +522,12 @@ func (rs *ReconnRemoteSigner) handleSignVoteRequest(
 	sig, voteExtSig, timestamp, err := rs.signWithTimeout(ctx, chainID, VoteToBlock(chainID, vote))
 	if err != nil {
 		if signRefusal(err) {
+			chainNodeSignResults.WithLabelValues(chainID, rs.address, "refused").Inc()
 			msgSum.SignedVoteResponse.Error = getRemoteSignerError(err)
 			return cometprotoprivval.Message{Sum: msgSum}, false
 		}
 		totalAbandonedSignRequests.WithLabelValues(chainID).Inc()
+		chainNodeSignResults.WithLabelValues(chainID, rs.address, "dropped").Inc()
 		rs.Logger.Error(
 			"Sign vote request failed, dropping connection so the node retries",
 			"chain_id", chainID,
@@ -535,6 +537,7 @@ func (rs *ReconnRemoteSigner) handleSignVoteRequest(
 		)
 		return cometprotoprivval.Message{}, true
 	}
+	chainNodeSignResults.WithLabelValues(chainID, rs.address, "signed").Inc()
 
 	// Echo the full request vote with only the signer-owned fields replaced: a
 	// chain node validates the returned vote as a complete message (gno.land/tm2
@@ -571,10 +574,12 @@ func (rs *ReconnRemoteSigner) handleSignProposalRequest(
 	signature, _, timestamp, err := rs.signWithTimeout(ctx, chainID, ProposalToBlock(chainID, proposal))
 	if err != nil {
 		if signRefusal(err) {
+			chainNodeSignResults.WithLabelValues(chainID, rs.address, "refused").Inc()
 			msgSum.SignedProposalResponse.Error = getRemoteSignerError(err)
 			return cometprotoprivval.Message{Sum: msgSum}, false
 		}
 		totalAbandonedSignRequests.WithLabelValues(chainID).Inc()
+		chainNodeSignResults.WithLabelValues(chainID, rs.address, "dropped").Inc()
 		rs.Logger.Error(
 			"Sign proposal request failed, dropping connection so the node retries",
 			"chain_id", chainID,
@@ -584,6 +589,7 @@ func (rs *ReconnRemoteSigner) handleSignProposalRequest(
 		)
 		return cometprotoprivval.Message{}, true
 	}
+	chainNodeSignResults.WithLabelValues(chainID, rs.address, "signed").Inc()
 
 	// Same echo contract as the vote response: return the request proposal with
 	// only the signature and timestamp filled in.
