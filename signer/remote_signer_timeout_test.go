@@ -13,6 +13,7 @@ import (
 	cometp2pconn "github.com/cometbft/cometbft/p2p/conn"
 	cometprotoprivval "github.com/cometbft/cometbft/proto/tendermint/privval"
 	cometproto "github.com/cometbft/cometbft/proto/tendermint/types"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -302,4 +303,31 @@ func TestPeerKeepaliveRespectsServerEnforcement(t *testing.T) {
 		"peerKeepalive Time must be >= the server's KeepaliveEnforcementPolicy MinTime")
 	require.True(t, params.PermitWithoutStream,
 		"peer keepalive must ping without an active stream so idle-but-dead peers are detected")
+}
+
+// Each handler outcome must tick its per-node counter with the right labels:
+// the metric is the operator's replacement for grepping refusal logs.
+func TestChainNodeSignResultsMetricLabels(t *testing.T) {
+	const address = "tcp://metrics-test:1234"
+	count := func(result string) float64 {
+		return testutil.ToFloat64(chainNodeSignResults.WithLabelValues("test-chain", address, result))
+	}
+
+	for _, tc := range []struct {
+		result  string
+		privVal PrivValidator
+	}{
+		{result: "signed", privVal: echoPrivVal{}},
+		{result: "refused", privVal: refusingPrivVal{}},
+		{result: "dropped", privVal: failingPrivVal{}},
+	} {
+		before := count(tc.result)
+		rs := NewReconnRemoteSigner(
+			address, cometlog.NewNopLogger(), tc.privVal,
+			net.Dialer{}, 1024*1024, ConnAuth{}, nil,
+		)
+		vote := cometproto.Vote{Type: cometproto.PrecommitType, Height: 1, Round: 0}
+		rs.handleSignVoteRequest(context.Background(), "test-chain", &vote)
+		require.Equal(t, before+1, count(tc.result), "outcome %q must increment its counter", tc.result)
+	}
 }

@@ -86,14 +86,18 @@ after one retry.
 
 ## Watching per-node outcomes with two chain nodes
 
-`signer_chain_node_sign_results` counts each sign request's outcome per chain
+`signer_total_chain_node_sign_results` counts sign-attempt outcomes per chain
 node: `signed` (a signature was returned, whether fresh or an existing one),
 `refused` (a terminal answer such as a stale request — the node keeps its
 connection and moves on), and `dropped` (the connection was closed so the node
-retries a transient failure). With two nodes behind one cluster, a healthy pair
-shows both nodes accumulating `signed`, the slower node some `refused`, and
-`dropped` near zero. A sustained `dropped` rate on one node means transient
-failures, not staleness — investigate the cluster, not the node.
+retries a transient failure). Requests rejected before a sign attempt (invalid
+chain ID, malformed request) are not counted, so the three results do not sum
+to total requests; `dropped` counts the same events as
+`signer_total_abandoned_sign_requests`, with the node label added. With two
+nodes behind one cluster, a healthy pair shows both nodes accumulating
+`signed`, the slower node some `refused`, and `dropped` near zero. A sustained
+`dropped` rate on one node means transient failures, not staleness —
+investigate the cluster, not the node.
 
 ## Metrics that don't always correspond to block time
 There is no guarantee that a Cosigner will sign a block if the threshold is reached early.  You may watch 'signer_seconds_since_last_local_sign_start_time' but there is no guarantee that 'signer_seconds_since_last_local_sign_finish_time' will be reached since there are multiple sanity checks that may cause an early exit in some circumstances (rather rare)
