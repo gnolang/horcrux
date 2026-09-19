@@ -247,6 +247,39 @@ func TestChainNodeReadDeadlineRedials(t *testing.T) {
 	}
 }
 
+// A refusal raised by a peer cosigner crosses the cluster RPC as a plain
+// string: gRPC erases the error type and the leader aggregates cosigner errors
+// with %s. The classifier must still recognize those as refusals — answering
+// them terminally — rather than dropping the chain node connection and sending
+// the node into a futile retry loop. Transient failures must stay unclassified
+// so the connection drop keeps triggering the node's retries.
+func TestSignRefusalClassifiesRefusalsAcrossClusterRPC(t *testing.T) {
+	refusals := []string{
+		"error from cosigner(s): rpc error: code = Unknown desc = height regression. Got 163330, last height 163335",
+		"error from cosigner(s): rpc error: code = Unknown desc = round regression at height 12. Got 0, last round 1",
+		"error from cosigner(s): rpc error: code = Unknown desc = step regression at height 12, round 0. Got 2, last step 3",
+		"error from cosigner(s): rpc error: code = Unknown desc = conflicting data. existing: abc - new: def",
+		"error from cosigner(s): rpc error: code = Unknown desc = differing block IDs - last Vote: a, new Vote: b",
+		"error from cosigner(s): rpc error: code = Unknown desc = already signed vote with non-nil BlockID. refusing to sign vote on nil BlockID",
+		"rpc error: code = Unknown desc = [gnoland-1] Progress already started on block 12.0.3, skipping 12.0.2",
+	}
+	for _, msg := range refusals {
+		require.True(t, signRefusal(errors.New(msg)), "must classify as refusal: %s", msg)
+	}
+
+	transients := []string{
+		"error from cosigner(s): rpc error: code = Unavailable desc = connection refused",
+		"error from cosigner(s): context deadline exceeded",
+		"sign request abandoned (timeout 3.5s): context deadline exceeded",
+		"combined signature is not valid",
+		"not enough cosigners",
+		"exceeded max attempts waiting for block to be signed",
+	}
+	for _, msg := range transients {
+		require.False(t, signRefusal(errors.New(msg)), "must stay transient: %s", msg)
+	}
+}
+
 // The peer keepalive ping interval must stay at or above the cosigner gRPC
 // server's enforcement MinTime; otherwise the server GOAWAYs peer connections
 // with "too_many_pings" and the cluster transport breaks. This guards both

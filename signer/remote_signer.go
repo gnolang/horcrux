@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strings"
 	"time"
 
 	cometcryptoed25519 "github.com/cometbft/cometbft/crypto/ed25519"
@@ -458,14 +459,41 @@ func signRefusal(err error) bool {
 		alreadySigned *AlreadySignedVoteError
 		sameHRS       *SameHRSError
 	)
-	return errors.As(err, &beyondBlock) ||
+	if errors.As(err, &beyondBlock) ||
 		errors.As(err, &heightReg) ||
 		errors.As(err, &roundReg) ||
 		errors.As(err, &stepReg) ||
 		errors.As(err, &conflicting) ||
 		errors.As(err, &diffBlockIDs) ||
 		errors.As(err, &alreadySigned) ||
-		errors.As(err, &sameHRS)
+		errors.As(err, &sameHRS) {
+		return true
+	}
+
+	// A refusal raised by a peer cosigner reaches this classifier as a plain
+	// string: gRPC erases the error type and the leader aggregates cosigner
+	// errors with %s (deliberately, so cosigner errors cannot satisfy typed
+	// checks meant for the leader's own state). Match the canonical texts of the
+	// refusal types above so those refusals are still answered terminally. The
+	// asymmetry of a misclassification: answering a transient as a refusal loses
+	// one vote, while dropping the connection on a genuine refusal costs the
+	// node its whole retry budget on a request that can never succeed.
+	msg := err.Error()
+	for _, refusal := range []string{
+		"height regression. Got ",
+		"round regression at height ",
+		"step regression at height ",
+		"conflicting data. existing: ",
+		"differing block IDs - last Vote: ",
+		"already signed vote with ",
+		"HRS is the same as current: ",
+		"Progress already started on block ",
+	} {
+		if strings.Contains(msg, refusal) {
+			return true
+		}
+	}
+	return false
 }
 
 func (rs *ReconnRemoteSigner) handleSignVoteRequest(
