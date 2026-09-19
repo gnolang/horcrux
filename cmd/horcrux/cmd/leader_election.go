@@ -55,6 +55,9 @@ horcrux elect 2 # elect specific leader`,
 			}
 
 			fmt.Printf("Broadcasting to address: %s\n", grpcAddress)
+			// grpc.Dial defaults to the passthrough resolver (per-attempt lookup by the
+			// dialer). A migration to grpc.NewClient must keep that via an explicit
+			// passthrough:/// target — NewClient defaults to the dns resolver instead.
 			conn, err := grpc.Dial(grpcAddress,
 				grpc.WithDefaultServiceConfig(serviceConfig),
 				grpc.WithTransportCredentials(signer.ClusterTransportCreds(clusterTLS)),
@@ -164,6 +167,9 @@ func getLeaderCmd() *cobra.Command {
 			}
 
 			fmt.Printf("Request address: %s\n", grpcAddress)
+			// grpc.Dial defaults to the passthrough resolver (per-attempt lookup by the
+			// dialer). A migration to grpc.NewClient must keep that via an explicit
+			// passthrough:/// target — NewClient defaults to the dns resolver instead.
 			conn, err := grpc.Dial(grpcAddress,
 				grpc.WithTransportCredentials(signer.ClusterTransportCreds(clusterTLS)),
 				grpc.WithDefaultCallOptions(grpc.WaitForReady(true)),

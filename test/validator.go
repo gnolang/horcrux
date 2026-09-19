@@ -312,6 +312,9 @@ func getLeader(ctx context.Context, cosigner *cosmos.SidecarProcess) (int, error
 		return -1, err
 	}
 	grpcAddress := ports[0]
+	// grpc.Dial defaults to the passthrough resolver (per-attempt lookup by the
+	// dialer). A migration to grpc.NewClient must keep that via an explicit
+	// passthrough:/// target — NewClient defaults to the dns resolver instead.
 	conn, err := grpc.Dial(grpcAddress,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithDefaultCallOptions(grpc.WaitForReady(true)),
