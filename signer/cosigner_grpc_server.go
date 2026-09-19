@@ -45,11 +45,17 @@ func (rpc *CosignerGRPCServer) SignBlock(
 	if err != nil {
 		return nil, err
 	}
-	return &proto.SignBlockResponse{
+	res := &proto.SignBlockResponse{
 		Signature:        sig,
 		VoteExtSignature: voteExtSig,
-		Timestamp:        stamp.UnixNano(),
-	}, nil
+	}
+	// UnixNano is undefined outside years 1678-2262: a zero time would encode as
+	// a garbage value that passes the receiver's is-set check. Leave the field
+	// unset instead, which the receiver answers by keeping the request timestamp.
+	if !stamp.IsZero() {
+		res.Timestamp = stamp.UnixNano()
+	}
+	return res, nil
 }
 
 func (rpc *CosignerGRPCServer) SetNoncesAndSign(
