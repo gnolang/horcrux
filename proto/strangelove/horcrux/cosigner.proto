@@ -18,6 +18,9 @@ message Block {
 	int32 step = 3;
 	bytes signBytes = 4;
 	bytes voteExtSignBytes = 5;
+	// UnixNano of the block timestamp; 0 means a zero-time timestamp (proto3
+	// cannot distinguish unset from zero, and UnixNano of the zero time is
+	// undefined garbage, so both sides treat 0 as the zero time).
 	int64 timestamp = 6;
 }
 
@@ -29,6 +32,9 @@ message SignBlockRequest {
 message SignBlockResponse {
 	bytes signature = 1;
 	bytes vote_ext_signature = 2;
+	// UnixNano of the timestamp the signature covers; 0 means unset (a leader
+	// on a build that predates this field, or a zero-time signature) and the
+	// receiver falls back to the timestamp it asked with.
 	int64 timestamp = 3;
 }
 

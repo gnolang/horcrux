@@ -318,24 +318,34 @@ func (block Block) HRSTKey() HRSTKey {
 }
 
 func (block Block) ToProto() *proto.Block {
-	return &proto.Block{
+	pb := &proto.Block{
 		Height:           block.Height,
 		Round:            block.Round,
 		Step:             int32(block.Step),
 		SignBytes:        block.SignBytes,
 		VoteExtSignBytes: block.VoteExtensionSignBytes,
-		Timestamp:        block.Timestamp.UnixNano(),
 	}
+	// UnixNano is undefined outside years 1678-2262; a zero time is carried as
+	// the unset sentinel (0) so it survives the round trip as zero instead of
+	// reconstructing as a year-1754 garbage timestamp on the other side.
+	if !block.Timestamp.IsZero() {
+		pb.Timestamp = block.Timestamp.UnixNano()
+	}
+	return pb
 }
 
 func BlockFromProto(block *proto.Block) Block {
+	var timestamp time.Time
+	if block.Timestamp != 0 {
+		timestamp = time.Unix(0, block.Timestamp)
+	}
 	return Block{
 		Height:                 block.Height,
 		Round:                  block.Round,
 		Step:                   int8(block.Step),
 		SignBytes:              block.SignBytes,
 		VoteExtensionSignBytes: block.VoteExtSignBytes,
-		Timestamp:              time.Unix(0, block.Timestamp),
+		Timestamp:              timestamp,
 	}
 }
 

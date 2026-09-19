@@ -206,8 +206,11 @@ func (cosigner *RemoteCosigner) Sign(
 	if err != nil {
 		return nil, err
 	}
-	// Older leaders leave the response timestamp unset; keep the request
-	// timestamp then, which is correct whenever the leader signed afresh.
+	// An unset response timestamp means either a leader on a build that predates
+	// the field, or a zero-time signature. Keep the request timestamp then: right
+	// whenever such a leader signed afresh, wrong when it answered from its cache
+	// over another timestamp — a window that closes once every cosigner that can
+	// win an election runs a build that sets the field (docs/signing.md).
 	// A populated timestamp may belong to a cached signature and must be kept.
 	timestamp := req.Block.Timestamp
 	if res.Timestamp != 0 {

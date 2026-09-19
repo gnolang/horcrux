@@ -271,3 +271,20 @@ func newMultiSentryTestValidator(
 
 	return validator, pubKey
 }
+
+// A zero-time timestamp must survive the Block proto round trip as zero, not as
+// the garbage UnixNano encodes for year-1 (which reconstructs as 1754 and would
+// bypass the response-side is-set guard one hop later).
+func TestBlockProtoRoundTripZeroTimestamp(t *testing.T) {
+	t.Parallel()
+
+	zero := Block{Height: 1, Round: 0, Step: stepPrevote}
+	require.Zero(t, zero.ToProto().Timestamp,
+		"a zero time must encode as the unset sentinel")
+	require.True(t, BlockFromProto(zero.ToProto()).Timestamp.IsZero(),
+		"the unset sentinel must decode back to a zero time")
+
+	stamped := Block{Height: 1, Round: 0, Step: stepPrevote, Timestamp: time.Unix(1700000000, 42)}
+	require.True(t, stamped.Timestamp.Equal(BlockFromProto(stamped.ToProto()).Timestamp),
+		"a real timestamp must round-trip exactly")
+}
