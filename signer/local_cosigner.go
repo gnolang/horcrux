@@ -248,10 +248,14 @@ func (cosigner *LocalCosigner) sign(req CosignerSignRequest) (CosignerSignRespon
 		// A delayed extension request may refer to an already signed vote the
 		// watermark has moved past, when another sentry drove the round forward
 		// while this one retried. Only reuse an exact cached vote, and only within
-		// the height the cosigner is on: the extension itself is opaque application
-		// bytes this cosigner cannot check, so signing one is bounded to the height
-		// it is already voting at, which a request for a fresh vote reaches anyway.
-		// Never sign an older vote anew.
+		// the height the cosigner is on; never sign an older vote anew. The exact
+		// bound this grants: an extension can be signed for any cached precommit
+		// at the current height, including rounds the watermark has passed —
+		// which a request for a fresh vote at that round does NOT reach. That is
+		// wider than fresh-vote signing, and acceptable because the extension
+		// bytes are domain-separated (CanonicalVoteExtension cannot be repurposed
+		// as a vote or proposal), the vote bytes must match the cache exactly,
+		// and conflicting extensions are not slashable.
 		latest, cached := ccs.lastSignState.GetFromCache(hrst.HRSKey())
 		if cached != nil && cached.Signature != nil &&
 			hrst.Height == latest.Height &&

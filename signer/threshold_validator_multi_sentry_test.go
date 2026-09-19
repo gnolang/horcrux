@@ -183,6 +183,62 @@ func TestThresholdValidatorMultipleSentriesSameProposal(t *testing.T) {
 	}
 }
 
+// A proposal for an already signed HRS with a DIFFERENT block must never mint a
+// new signature: the existing signature is returned with the timestamp it was
+// made over. That signature does not verify over the conflicting proposal — the
+// node broadcasts it and peers reject it — which is the safe outcome: the
+// signer holds one signature per proposal HRS, and a conflicting payload can
+// never obtain a second one.
+func TestThresholdValidatorConflictingProposalGetsExistingSignature(t *testing.T) {
+	t.Parallel()
+
+	validator, pubKey := newMultiSentryTestValidator(t, 2, 3)
+	defer validator.Stop()
+
+	ctx := context.Background()
+	require.NoError(t, validator.LoadSignStateIfNecessary(testChainID))
+
+	hash := cometrand.Bytes(tmhash.Size)
+	first := cometproto.Proposal{
+		Height: 1,
+		Round:  1,
+		Type:   cometproto.ProposalType,
+		BlockID: cometproto.BlockID{
+			Hash:          hash,
+			PartSetHeader: cometproto.PartSetHeader{Total: 1, Hash: hash},
+		},
+		Timestamp: time.Now(),
+	}
+
+	validator.nonceCache.LoadN(ctx, 2)
+
+	sig, _, stamp, err := validator.Sign(ctx, testChainID, ProposalToBlock(testChainID, &first))
+	require.NoError(t, err)
+
+	conflictingHash := cometrand.Bytes(tmhash.Size)
+	conflicting := first
+	conflicting.BlockID = cometproto.BlockID{
+		Hash:          conflictingHash,
+		PartSetHeader: cometproto.PartSetHeader{Total: 1, Hash: conflictingHash},
+	}
+	conflicting.Timestamp = first.Timestamp.Add(2 * time.Millisecond)
+
+	conflictingSig, _, conflictingStamp, err := validator.Sign(
+		ctx, testChainID, ProposalToBlock(testChainID, &conflicting))
+	require.NoError(t, err)
+
+	require.True(t, bytes.Equal(sig, conflictingSig),
+		"a conflicting proposal must receive the existing signature, never a new one")
+	require.True(t, stamp.Equal(conflictingStamp),
+		"the existing signature must come with the timestamp it was made over")
+
+	// The returned signature covers the first proposal, not the conflicting one.
+	first.Timestamp = stamp
+	require.True(t, pubKey.VerifySignature(ProposalToBlock(testChainID, &first).SignBytes, sig))
+	conflicting.Timestamp = conflictingStamp
+	require.False(t, pubKey.VerifySignature(ProposalToBlock(testChainID, &conflicting).SignBytes, conflictingSig))
+}
+
 // newMultiSentryTestValidator builds a threshold validator backed by local cosigners,
 // with itself as the raft leader so Sign runs the signing process rather than proxying.
 func newMultiSentryTestValidator(
