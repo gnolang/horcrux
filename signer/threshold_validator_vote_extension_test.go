@@ -123,10 +123,15 @@ func (s *recordingExtensionSigner) Sign(nonces []Nonce, payload []byte) ([]byte,
 
 func TestThresholdValidatorVoteExtensionFailurePreservesVote(t *testing.T) {
 	validator, cosigners, pubKey := newVoteExtensionTestValidator(t)
-	state, err := cosigners[0].getChainState(testChainID)
-	require.NoError(t, err)
-	recorder := &recordingExtensionSigner{ThresholdSigner: state.signer}
-	state.signer = recorder
+	recorders := make([]*recordingExtensionSigner, len(cosigners))
+	for i, cosigner := range cosigners {
+		require.NoError(t, cosigner.LoadSignStateIfNecessary(testChainID))
+		state, err := cosigner.getChainState(testChainID)
+		require.NoError(t, err)
+		recorders[i] = &recordingExtensionSigner{ThresholdSigner: state.signer}
+		state.signer = recorders[i]
+	}
+	recorder := recorders[0]
 	ctx := context.Background()
 	vote := voteWithExtension("first")
 	originalBlock := VoteToBlock(testChainID, &vote)
@@ -156,20 +161,28 @@ func TestThresholdValidatorVoteExtensionFailurePreservesVote(t *testing.T) {
 
 	// Payloads may repeat — a byte-identical repeat is signed anew under its own
 	// nonce round so its share can combine with the rest of that round — but no
-	// nonce may ever be reused across operations, and the vote signature on the
-	// wire stayed the original throughout (retrySig == sig above).
-	voteSigns := 0
-	seenNonces := make(map[string]bool)
-	for i, payload := range recorder.payloads {
-		if bytes.Equal(payload, originalBlock.SignBytes) {
-			voteSigns++
+	// nonce may ever be reused across any signing operation on any cosigner, and
+	// the vote signature on the wire stayed the original throughout
+	// (retrySig == sig above). The vote is signed exactly three times per
+	// cosigner: the original attempt, the failed extension retry, and the
+	// successful extension retry — each under its own nonce round.
+	for c, rec := range recorders {
+		// Per cosigner: a source's round nonce public legitimately appears at
+		// every destination, so uniqueness only holds within one cosigner's
+		// signing operations — which is where reuse would leak the shard.
+		seenNonces := make(map[string]bool)
+		voteSigns := 0
+		for i, payload := range rec.payloads {
+			if bytes.Equal(payload, originalBlock.SignBytes) {
+				voteSigns++
+			}
+			for _, pubKey := range rec.nonces[i] {
+				require.False(t, seenNonces[string(pubKey)], "a public nonce was reused across signing operations")
+				seenNonces[string(pubKey)] = true
+			}
 		}
-		for _, pubKey := range recorder.nonces[i] {
-			require.False(t, seenNonces[string(pubKey)], "a public nonce was reused across signing operations")
-			seenNonces[string(pubKey)] = true
-		}
+		require.Equal(t, 3, voteSigns, "unexpected vote sign count on cosigner %d", c+1)
 	}
-	require.GreaterOrEqual(t, voteSigns, 1, "the original vote must have been signed")
 }
 
 func TestThresholdValidatorVoteExtensionAfterStateChange(t *testing.T) {

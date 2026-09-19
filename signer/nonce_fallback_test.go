@@ -40,16 +40,19 @@ func TestNonceFallbackTimeoutDoesNotLeakGoroutines(t *testing.T) {
 	const rounds = 8
 	baseline := runtime.NumGoroutine()
 
-	for i := 0; i < rounds; i++ {
+	for range rounds {
 		_, err := validator.getNoncesFallback(context.Background(), 1)
 		require.Error(t, err, "the threshold is unreachable, the fallback must time out")
 	}
 
 	// The worker goroutines end as soon as their cosigner calls return; only a
-	// leaked waiter survives. Allow the workers a moment to drain.
+	// leaked waiter survives. Allow the workers a moment to drain, and report
+	// the count observed at failure time rather than before the wait.
+	var leaked int
 	require.Eventually(t, func() bool {
-		return runtime.NumGoroutine() <= baseline+2
+		leaked = runtime.NumGoroutine() - baseline
+		return leaked <= 2
 	}, 2*time.Second, 20*time.Millisecond,
-		"leaked %d goroutines across %d timed-out fallbacks",
-		runtime.NumGoroutine()-baseline, rounds)
+		"leaked goroutines across %d timed-out fallbacks (last count: see condition)", rounds)
+	require.LessOrEqual(t, leaked, 2)
 }
