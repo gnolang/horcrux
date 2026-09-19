@@ -65,10 +65,21 @@ func TestThresholdValidatorRetryAfterFailedAttempt(t *testing.T) {
 		Timestamp: time.Now(),
 	}
 
+	// Two attempts, one nonce round each, plus slack.
 	validator.nonceCache.LoadN(ctx, 4)
 
 	_, _, _, err := validator.Sign(ctx, testChainID, VoteToBlock(testChainID, &vote))
-	require.Error(t, err, "the injected cosigner failure must fail the first attempt")
+	require.Error(t, err, "the first attempt must fail")
+	require.True(t, peer.failed.Load(),
+		"the injected failure must be what failed the first attempt")
+
+	// The leader's own cosigner produced and saved its share during the failed
+	// attempt — the precondition that makes the retry hit the byte-identical
+	// gate with a share from the earlier nonce round.
+	leaderState, err := cosigners[0].getChainState(testChainID)
+	require.NoError(t, err)
+	require.Equal(t, vote.Height, leaderState.lastSignState.LatestHRS().Height,
+		"the leader's cosigner must have saved its share during the failed attempt")
 
 	// The same node retries the identical vote; the cluster draws a fresh nonce
 	// round for it.
