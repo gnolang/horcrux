@@ -142,6 +142,13 @@ func (signState *SignState) existingSignatureOrErrorIfRegression(hrst HRSTKey, s
 	return nil, nil
 }
 
+// LatestHRS returns the sign state's high-watermark height/round/step.
+func (signState *SignState) LatestHRS() HRSKey {
+	signState.mu.RLock()
+	defer signState.mu.RUnlock()
+	return signState.lockedHrsKey()
+}
+
 func (signState *SignState) lockedHrsKey() HRSKey {
 	return HRSKey{
 		Height: signState.Height,

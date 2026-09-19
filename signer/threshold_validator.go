@@ -850,8 +850,8 @@ func (pv *ThresholdValidator) Sign(
 			// refusal crosses the cluster RPC as an untyped string that the
 			// privval handler cannot classify as a refusal, so it would drop the
 			// chain node connection for a condition no retry can change.
-			css := pv.mustLoadChainState(chainID)
-			if latest, _ := css.lastSignState.GetFromCache(block.HRSKey()); block.Height != latest.Height {
+			latest := pv.mustLoadChainState(chainID).lastSignState.LatestHRS()
+			if block.Height != latest.Height {
 				return nil, nil, stamp, newHeightRegressionError(block.Height, latest.Height)
 			}
 			log.Debug("Signing a changed vote extension for an already signed vote")
