@@ -243,7 +243,8 @@ func (cosigner *LocalCosigner) sign(req CosignerSignRequest) (CosignerSignRespon
 	// This function has multiple exit points.  Only start time can be guaranteed
 	metricsTimeKeeper.SetPreviousLocalSignStart(time.Now())
 
-	existingSignature, err := ccs.lastSignState.existingSignatureOrErrorIfRegression(hrst, req.SignBytes)
+	var existingSignature []byte
+	err = ccs.lastSignState.errorIfConflictOrRegression(hrst, req.SignBytes)
 	if err != nil && hasVoteExtensions {
 		// A delayed extension request may refer to an already signed vote the
 		// watermark has moved past, when another sentry drove the round forward
@@ -274,6 +275,12 @@ func (cosigner *LocalCosigner) sign(req CosignerSignRequest) (CosignerSignRespon
 		cosigner.noncesMu.Unlock()
 	}()
 
+	// existingSignature is only ever set by the passed-round extension fallback
+	// above. Re-serving the cached share is safe there alone: the leader's
+	// extension retry discards vote shares and combines only the extension
+	// shares, so the vote share's nonce round does not matter. Every other
+	// byte-identical repeat is signed anew under the request's nonce round so
+	// its share can combine with the rest of that round.
 	if existingSignature != nil {
 		res.Signature = existingSignature
 		if hasVoteExtensions {
@@ -354,7 +361,7 @@ func (cosigner *LocalCosigner) sign(req CosignerSignRequest) (CosignerSignRespon
 		// it is for the same block (or differs only by timestamp); if the stored
 		// block differs materially, returning our signature would be a double
 		// sign, so refuse and discard it.
-		if _, checkErr := ccs.lastSignState.existingSignatureOrErrorIfRegression(hrst, req.SignBytes); checkErr != nil {
+		if checkErr := ccs.lastSignState.errorIfConflictOrRegression(hrst, req.SignBytes); checkErr != nil {
 			return res, checkErr
 		}
 	}

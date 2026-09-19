@@ -116,30 +116,35 @@ type SignState struct {
 	cond  *cond.Cond
 }
 
-func (signState *SignState) existingSignatureOrErrorIfRegression(hrst HRSTKey, signBytes []byte) ([]byte, error) {
+// errorIfConflictOrRegression gates a share sign request against this state: a
+// regression (height, round or step behind the watermark) or a same-HRS payload
+// that differs by more than the timestamp is refused. A byte-identical or
+// timestamp-only repeat passes and is signed anew under the request's own nonce
+// round — never served from the stored share: a share only combines with shares
+// from the same nonce round, so re-serving one poisons a retry's combine
+// ("ephemeral public keys do not match"). Signing the same payload again under
+// fresh nonces is safe; reusing nonces is prevented by the per-UUID
+// delete-after-use in LocalCosigner.sign.
+func (signState *SignState) errorIfConflictOrRegression(hrst HRSTKey, signBytes []byte) error {
 	signState.mu.RLock()
 	defer signState.mu.RUnlock()
 
 	sameHRS, err := signState.CheckHRS(hrst)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	if !sameHRS {
 		// not a regression in height. okay to sign
-		return nil, nil
+		return nil
 	}
 
-	// If the HRS is the same the sign bytes may still differ by timestamp
-	// It is ok to re-sign a different timestamp if that is the only difference in the sign bytes
 	if bytes.Equal(signBytes, signState.SignBytes) {
-		return signState.Signature, nil
-	} else if err := signState.OnlyDifferByTimestamp(signBytes); err != nil {
-		return nil, err
+		return nil
 	}
-
-	// same HRS, and only differ by timestamp - ok to sign again
-	return nil, nil
+	// Same HRS with different bytes: allowed only when the difference is the
+	// timestamp; anything else is a conflicting payload.
+	return signState.OnlyDifferByTimestamp(signBytes)
 }
 
 // LatestHRS returns the sign state's high-watermark height/round/step.

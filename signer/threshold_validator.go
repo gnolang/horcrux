@@ -711,8 +711,9 @@ func (pv *ThresholdValidator) voteExtensionNonces(ctx context.Context) (*Cosigne
 
 // signVoteExtension signs an extension for a vote whose full signature is already
 // cached. The existing RPC carries the original vote as well so each cosigner
-// still checks its signing state before signing the extension. Cached vote shares
-// may come from different nonce rounds, so only extension shares are combined.
+// still checks its signing state before signing the extension. Only the
+// extension shares are combined: the vote already has its full signature, and
+// the fresh vote shares each cosigner produces alongside are discarded.
 // An error here must not replace the completed vote with a failed-sign marker.
 func (pv *ThresholdValidator) signVoteExtension(
 	ctx context.Context,
