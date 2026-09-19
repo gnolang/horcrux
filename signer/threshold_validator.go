@@ -538,9 +538,6 @@ func (pv *ThresholdValidator) getNoncesFallback(
 	drainedNonceCache.Inc()
 	totalDrainedNonceCache.Inc()
 
-	var wg sync.WaitGroup
-	wg.Add(pv.threshold)
-
 	var mu sync.Mutex
 
 	uuids := make([]uuid.UUID, count)
@@ -553,31 +550,23 @@ func (pv *ThresholdValidator) getNoncesFallback(
 	copy(allCosigners[1:], pv.peerCosigners)
 
 	var thresholdNonces CosignersAndNonces
+	// Closed under mu by whichever cosigner completes the threshold. A channel
+	// rather than a WaitGroup: a count that errors can leave short would pin a
+	// waiter goroutine forever, leaking one per failed fallback — the worker
+	// goroutines themselves always end when their cosigner call returns.
+	thresholdReached := make(chan struct{})
 
 	for _, c := range allCosigners {
-		go pv.waitForPeerNonces(ctx, uuids, c, &wg, &thresholdNonces, &mu)
+		go pv.waitForPeerNonces(ctx, uuids, c, thresholdReached, &thresholdNonces, &mu)
 	}
 
 	// Wait for threshold cosigners to be complete
 	// A Cosigner will either respond in time, or be cancelled with timeout
-	if waitUntilCompleteOrTimeout(&wg, pv.grpcTimeout) {
-		return nil, errors.New("timed out waiting for ephemeral shares")
-	}
-
-	return &thresholdNonces, nil
-}
-
-func waitUntilCompleteOrTimeout(wg *sync.WaitGroup, timeout time.Duration) bool {
-	c := make(chan struct{})
-	go func() {
-		defer close(c)
-		wg.Wait()
-	}()
 	select {
-	case <-c:
-		return false // completed normally
-	case <-time.After(timeout):
-		return true // timed out
+	case <-thresholdReached:
+		return &thresholdNonces, nil
+	case <-time.After(pv.grpcTimeout):
+		return nil, errors.New("timed out waiting for ephemeral shares")
 	}
 }
 
@@ -590,7 +579,7 @@ func (pv *ThresholdValidator) waitForPeerNonces(
 	ctx context.Context,
 	uuids []uuid.UUID,
 	peer Cosigner,
-	wg *sync.WaitGroup,
+	thresholdReached chan<- struct{},
 	thresholdNonces *CosignersAndNonces,
 	mu sync.Locker,
 ) {
@@ -608,26 +597,30 @@ func (pv *ThresholdValidator) waitForPeerNonces(
 	missedNonces.WithLabelValues(peer.GetAddress()).Set(0)
 	timedCosignerNonceLag.WithLabelValues(peer.GetAddress()).Observe(time.Since(peerStartTime).Seconds())
 
-	// Check so that wg.Done is not called more than (threshold - 1) times which causes hardlock
 	mu.Lock()
-	if len(thresholdNonces.Cosigners) < pv.threshold {
-		thresholdNonces.Cosigners = append(thresholdNonces.Cosigners, peer)
-		for _, n := range peerNonces {
-			var found bool
-			for _, nn := range thresholdNonces.Nonces {
-				if n.UUID == nn.UUID {
-					nn.Nonces = append(nn.Nonces, n.Nonces...)
-					found = true
-					break
-				}
-			}
-			if !found {
-				thresholdNonces.Nonces = append(thresholdNonces.Nonces, n)
+	defer mu.Unlock()
+	// A late success past the threshold must not touch the result the caller may
+	// already be reading, and must not close the channel twice.
+	if len(thresholdNonces.Cosigners) >= pv.threshold {
+		return
+	}
+	thresholdNonces.Cosigners = append(thresholdNonces.Cosigners, peer)
+	for _, n := range peerNonces {
+		var found bool
+		for _, nn := range thresholdNonces.Nonces {
+			if n.UUID == nn.UUID {
+				nn.Nonces = append(nn.Nonces, n.Nonces...)
+				found = true
+				break
 			}
 		}
-		defer wg.Done()
+		if !found {
+			thresholdNonces.Nonces = append(thresholdNonces.Nonces, n)
+		}
 	}
-	mu.Unlock()
+	if len(thresholdNonces.Cosigners) == pv.threshold {
+		close(thresholdReached)
+	}
 }
 
 func (pv *ThresholdValidator) proxyIfNecessary(
