@@ -73,9 +73,12 @@ width is acceptable because extension bytes are domain-separated
 (`CanonicalVoteExtension` cannot be repurposed as a vote or proposal), the vote
 bytes must match the cache exactly, and conflicting extensions are not slashable.
 The leader decides the height bound itself before drawing nonces or contacting
-cosigners, so a sentry a height behind is answered with a typed refusal, not a
-dropped connection: no retry of it can succeed. Its vote signature stays cached
-and served.
+cosigners, so a sentry a height behind is answered with a refusal, not a
+dropped connection: no retry of it can succeed. The refusal is typed on the
+leader; when the sentry is attached to a follower it crosses the cluster RPC as
+a string and is classified by the canonical refusal texts instead. The refused
+retry gets no signature, but the vote's cached signature keeps being served to
+requests that match it.
 
 Upgrade all cosigners before relying on retries with changed extensions. Older
 cosigners may return a cached vote share without an extension share; those
