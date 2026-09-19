@@ -79,7 +79,10 @@ Each block, Nonce Secrets are shared between Cosigners.  Monitoring 'signer_seco
 horcrux had already signed but with a different vote extension, so horcrux signed
 that extension again under fresh nonces. A low rate is normal after a sentry
 restart. A rate approaching one per block points at a sentry that keeps retrying,
-and each re-sign consumes an extra pair of nonce rounds.
+and each re-sign consumes an extra pair of nonce rounds. A re-signed extension is
+not written back to the sign state, so an application that builds a different
+extension on every request sustains that rate indefinitely rather than settling
+after one retry.
 
 ## Watching per-node outcomes with two chain nodes
 
