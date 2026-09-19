@@ -52,6 +52,8 @@ func (rpc *CosignerGRPCServer) SignBlock(
 	// UnixNano is undefined outside years 1678-2262: a zero time would encode as
 	// a garbage value that passes the receiver's is-set check. Leave the field
 	// unset instead, which the receiver answers by keeping the request timestamp.
+	// A Unix-epoch time (not zero, UnixNano 0) also encodes as unset; real chain
+	// timestamps are never the epoch, and both readings fall back the same way.
 	if !stamp.IsZero() {
 		res.Timestamp = stamp.UnixNano()
 	}
