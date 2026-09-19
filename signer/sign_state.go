@@ -123,8 +123,9 @@ type SignState struct {
 // round — never served from the stored share: a share only combines with shares
 // from the same nonce round, so re-serving one poisons a retry's combine
 // ("ephemeral public keys do not match"). Signing the same payload again under
-// fresh nonces is safe; reusing nonces is prevented by the per-UUID
-// delete-after-use in LocalCosigner.sign.
+// fresh nonces is safe; nonce reuse is prevented by LocalCosigner.combinedNonces
+// consuming a UUID's nonces on read, under the write lock — concurrent requests
+// for one UUID cannot both obtain them, so a nonce round signs at most once.
 func (signState *SignState) errorIfConflictOrRegression(hrst HRSTKey, signBytes []byte) error {
 	signState.mu.RLock()
 	defer signState.mu.RUnlock()
