@@ -290,7 +290,7 @@ var (
 	)
 
 	chainNodeSignResults = promauto.NewCounterVec(prometheus.CounterOpts{
-		Name: "signer_chain_node_sign_results",
+		Name: "signer_total_chain_node_sign_results",
 		Help: "Sign Request Outcomes per Chain Node: signed (includes deduplicated answers), " +
 			"refused (terminal answer, e.g. a stale request), dropped (connection closed so the node retries)",
 	},
