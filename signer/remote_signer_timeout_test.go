@@ -260,7 +260,8 @@ func TestSignRefusalClassifiesRefusalsAcrossClusterRPC(t *testing.T) {
 		"error from cosigner(s): rpc error: code = Unknown desc = step regression at height 12, round 0. Got 2, last step 3",
 		"error from cosigner(s): rpc error: code = Unknown desc = conflicting data. existing: abc - new: def",
 		"error from cosigner(s): rpc error: code = Unknown desc = differing block IDs - last Vote: a, new Vote: b",
-		"error from cosigner(s): rpc error: code = Unknown desc = already signed vote with non-nil BlockID. refusing to sign vote on nil BlockID",
+		"error from cosigner(s): rpc error: code = Unknown desc = already signed vote with non-nil BlockID. " +
+			"refusing to sign vote on nil BlockID",
 		"rpc error: code = Unknown desc = [gnoland-1] Progress already started on block 12.0.3, skipping 12.0.2",
 	}
 	for _, msg := range refusals {

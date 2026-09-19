@@ -289,6 +289,14 @@ var (
 		[]string{"chain_id"},
 	)
 
+	chainNodeSignResults = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "signer_chain_node_sign_results",
+		Help: "Sign Request Outcomes per Chain Node: signed (includes deduplicated answers), " +
+			"refused (terminal answer, e.g. a stale request), dropped (connection closed so the node retries)",
+	},
+		[]string{"chain_id", "node", "result"},
+	)
+
 	totalInsufficientCosigners = promauto.NewCounter(prometheus.CounterOpts{
 		Name: "signer_error_total_insufficient_cosigners",
 		Help: "Total Times Cosigners doesn't reach threshold",
