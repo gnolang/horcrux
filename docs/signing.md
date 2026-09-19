@@ -65,10 +65,17 @@ while the watermark has moved past the vote within its height — another sentry
 driving the round forward, say — but not once it has moved to a later height, even
 though the vote is still cached there. An extension is opaque application data a
 cosigner cannot check, so serving one for a decided block would let a leader obtain
-a threshold signature over extension bytes of its choosing for that block; bounding
-it to the current height grants nothing a request for a fresh vote does not already
-reach. A sentry a height behind is answered with a refusal, not a dropped
-connection: no retry of it can succeed. Its vote signature stays cached and served.
+a threshold signature over extension bytes of its choosing for that block. The
+exact bound is: an extension can be signed for any cached precommit at the
+cosigner's current height, including rounds the watermark has passed — which is
+wider than fresh-vote signing (a fresh vote at a passed round is refused). That
+width is acceptable because extension bytes are domain-separated
+(`CanonicalVoteExtension` cannot be repurposed as a vote or proposal), the vote
+bytes must match the cache exactly, and conflicting extensions are not slashable.
+The leader decides the height bound itself before drawing nonces or contacting
+cosigners, so a sentry a height behind is answered with a typed refusal, not a
+dropped connection: no retry of it can succeed. Its vote signature stays cached
+and served.
 
 Upgrade all cosigners before relying on retries with changed extensions. Older
 cosigners may return a cached vote share without an extension share; those
