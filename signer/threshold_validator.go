@@ -538,6 +538,12 @@ func (pv *ThresholdValidator) getNoncesFallback(
 	drainedNonceCache.Inc()
 	totalDrainedNonceCache.Inc()
 
+	// The workers below end when their cosigner call returns; bounding the calls
+	// here makes that self-contained instead of relying on a deadline further up
+	// the request path.
+	ctx, cancel := context.WithTimeout(ctx, pv.grpcTimeout)
+	defer cancel()
+
 	var mu sync.Mutex
 
 	uuids := make([]uuid.UUID, count)
@@ -553,7 +559,9 @@ func (pv *ThresholdValidator) getNoncesFallback(
 	// Closed under mu by whichever cosigner completes the threshold. A channel
 	// rather than a WaitGroup: a count that errors can leave short would pin a
 	// waiter goroutine forever, leaking one per failed fallback — the worker
-	// goroutines themselves always end when their cosigner call returns.
+	// goroutines themselves always end when their bounded cosigner call returns.
+	// An unreachable threshold (misconfiguration) never closes the channel and
+	// the fallback times out, instead of returning an empty nonce set.
 	thresholdReached := make(chan struct{})
 
 	for _, c := range allCosigners {
