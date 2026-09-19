@@ -186,9 +186,12 @@ func TestThresholdValidatorMultipleSentriesSameProposal(t *testing.T) {
 // A proposal for an already signed HRS with a DIFFERENT block must never mint a
 // new signature: the existing signature is returned with the timestamp it was
 // made over. That signature does not verify over the conflicting proposal — the
-// node broadcasts it and peers reject it — which is the safe outcome: the
-// signer holds one signature per proposal HRS, and a conflicting payload can
-// never obtain a second one.
+// node broadcasts it, peers reject it, and the round times out. Safe against
+// double-signing (one signature per proposal HRS, a conflicting payload never
+// obtains a second one) but a liveness gap: a typed refusal would let the node
+// move on without the dead broadcast, and refusals no longer cost a connection.
+// This test pins the current answer; changing it to a refusal is a deliberate
+// behavior change, not a regression.
 func TestThresholdValidatorConflictingProposalGetsExistingSignature(t *testing.T) {
 	t.Parallel()
 
