@@ -370,6 +370,26 @@ func newStepRegressionError(height, round int64, regressed, last int8) *StepRegr
 
 var ErrEmptySignBytes = errors.New("no SignBytes found")
 
+// signRefusalMessages are the canonical texts of the sign refusals raised in
+// this package: the regression, conflict and already-signed errors above,
+// BeyondBlockError, and the untyped refusals in the single-signer FilePV path
+// (signer/file.go). A refusal raised by a peer cosigner crosses the cluster
+// RPC as a plain string, so remote_signer's signRefusal falls back to matching
+// these texts. Keep this list in lockstep with the Error() methods —
+// TestSignRefusalClassifiesRefusalsAcrossClusterRPC derives its inputs from
+// the constructors so a drift fails there.
+var signRefusalMessages = []string{
+	"height regression. Got ",
+	"round regression at height ",
+	"step regression at height ",
+	"conflicting data",
+	"differing block IDs - last Vote: ",
+	"already signed vote with ",
+	"HRS is the same as current: ",
+	"Progress already started on block ",
+	"no SignBytes found",
+}
+
 // CheckHRS checks the given height, round, step (HRS) against that of the
 // SignState. It returns an error if the arguments constitute a regression,
 // or if they match but the SignBytes are empty.

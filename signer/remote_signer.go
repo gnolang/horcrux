@@ -479,16 +479,7 @@ func signRefusal(err error) bool {
 	// one vote, while dropping the connection on a genuine refusal costs the
 	// node its whole retry budget on a request that can never succeed.
 	msg := err.Error()
-	for _, refusal := range []string{
-		"height regression. Got ",
-		"round regression at height ",
-		"step regression at height ",
-		"conflicting data. existing: ",
-		"differing block IDs - last Vote: ",
-		"already signed vote with ",
-		"HRS is the same as current: ",
-		"Progress already started on block ",
-	} {
+	for _, refusal := range signRefusalMessages {
 		if strings.Contains(msg, refusal) {
 			return true
 		}

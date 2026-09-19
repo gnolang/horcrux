@@ -3,6 +3,7 @@ package signer
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"testing"
 	"time"
@@ -254,18 +255,28 @@ func TestChainNodeReadDeadlineRedials(t *testing.T) {
 // the node into a futile retry loop. Transient failures must stay unclassified
 // so the connection drop keeps triggering the node's retries.
 func TestSignRefusalClassifiesRefusalsAcrossClusterRPC(t *testing.T) {
-	refusals := []string{
-		"error from cosigner(s): rpc error: code = Unknown desc = height regression. Got 163330, last height 163335",
-		"error from cosigner(s): rpc error: code = Unknown desc = round regression at height 12. Got 0, last round 1",
-		"error from cosigner(s): rpc error: code = Unknown desc = step regression at height 12, round 0. Got 2, last step 3",
-		"error from cosigner(s): rpc error: code = Unknown desc = conflicting data. existing: abc - new: def",
-		"error from cosigner(s): rpc error: code = Unknown desc = differing block IDs - last Vote: a, new Vote: b",
-		"error from cosigner(s): rpc error: code = Unknown desc = already signed vote with non-nil BlockID. " +
-			"refusing to sign vote on nil BlockID",
-		"rpc error: code = Unknown desc = [gnoland-1] Progress already started on block 12.0.3, skipping 12.0.2",
+	// The inputs derive from the refusal constructors so a change to any
+	// Error() text breaks this test at the point of the change: string matching
+	// across the RPC boundary is only as strong as this coupling.
+	rpcWrap := func(err error) error {
+		return fmt.Errorf("error from cosigner(s): rpc error: code = Unknown desc = %s", err.Error())
 	}
-	for _, msg := range refusals {
-		require.True(t, signRefusal(errors.New(msg)), "must classify as refusal: %s", msg)
+	refusals := []error{
+		rpcWrap(newHeightRegressionError(163330, 163335)),
+		rpcWrap(newRoundRegressionError(12, 0, 1)),
+		rpcWrap(newStepRegressionError(12, 0, 2, 3)),
+		rpcWrap(newConflictingDataError([]byte("abc"), []byte("def"))),
+		rpcWrap(newDiffBlockIDsError([]byte{0xaa}, []byte{0xbb})),
+		rpcWrap(newAlreadySignedVoteError(true)),
+		rpcWrap(newSameHRSError(HRSKey{Height: 12, Round: 0, Step: 3})),
+		fmt.Errorf("rpc error: code = Unknown desc = %s",
+			(&BeyondBlockError{msg: "[gnoland-1] Progress already started on block 12.0.3, skipping 12.0.2"}).Error()),
+		// Single-signer mode raises these without a type (signer/file.go).
+		errors.New("conflicting data"),
+		ErrEmptySignBytes,
+	}
+	for _, err := range refusals {
+		require.True(t, signRefusal(err), "must classify as refusal: %s", err)
 	}
 
 	transients := []string{
