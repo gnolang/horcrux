@@ -276,14 +276,14 @@ func (cosigner *LocalCosigner) sign(req CosignerSignRequest) (CosignerSignRespon
 	}()
 
 	// existingSignature is only ever set by the passed-round extension fallback
-	// above. Re-serving the cached share is safe there alone: the leader's
-	// extension retry discards vote shares and combines only the extension
-	// shares, so the vote share's nonce round does not matter. Every other
-	// byte-identical repeat is signed anew under the request's nonce round so
-	// its share can combine with the rest of that round.
+	// above, which requires hasVoteExtensions. Re-serving the cached share is
+	// safe there alone: the leader's extension retry discards vote shares and
+	// combines only the extension shares, so the vote share's nonce round does
+	// not matter. Every other byte-identical repeat is signed anew under the
+	// request's nonce round so its share can combine with the rest of that round.
 	if existingSignature != nil {
 		res.Signature = existingSignature
-		if hasVoteExtensions {
+		{
 			// Extensions may change while the vote stays identical. Sign the
 			// requested extension under fresh nonces, leaving the vote state intact.
 			nonces, err := cosigner.combinedNonces(
