@@ -835,6 +835,15 @@ func (pv *ThresholdValidator) Sign(
 		// The vote cache does not identify the extension. Reuse its extension
 		// signature only if it verifies against the extension in this request.
 		if !pv.myCosigner.VerifySignature(chainID, voteExtensionSignBytes, existingVoteExtSig) {
+			// Decide the height bound here, before nonces are drawn or cosigners
+			// contacted. Each cosigner enforces the same bound, but a peer's
+			// refusal crosses the cluster RPC as an untyped string that the
+			// privval handler cannot classify as a refusal, so it would drop the
+			// chain node connection for a condition no retry can change.
+			css := pv.mustLoadChainState(chainID)
+			if latest, _ := css.lastSignState.GetFromCache(block.HRSKey()); block.Height != latest.Height {
+				return nil, nil, stamp, newHeightRegressionError(block.Height, latest.Height)
+			}
 			log.Debug("Signing a changed vote extension for an already signed vote")
 			totalVoteExtensionResigns.WithLabelValues(chainID).Inc()
 			existingVoteExtSig, err = pv.signVoteExtension(ctx, chainID, block, existingTimestamp)

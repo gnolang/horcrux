@@ -487,3 +487,81 @@ func TestThresholdValidatorVoteExtensionRefusedAfterHeightAdvance(t *testing.T) 
 	require.Equal(t, sig, resig)
 	require.True(t, stamp.Equal(restamp))
 }
+
+// countingCosigner counts cluster RPCs to a peer so a test can assert a request
+// was decided on the leader without consulting any cosigner.
+type countingCosigner struct {
+	Cosigner
+	calls struct {
+		sync.Mutex
+		nonces, signs int
+	}
+}
+
+func (c *countingCosigner) GetNonces(ctx context.Context, uuids []uuid.UUID) (CosignerUUIDNoncesMultiple, error) {
+	c.calls.Lock()
+	c.calls.nonces++
+	c.calls.Unlock()
+	return c.Cosigner.GetNonces(ctx, uuids)
+}
+
+func (c *countingCosigner) SetNoncesAndSign(
+	ctx context.Context,
+	req CosignerSetNoncesAndSignRequest,
+) (*CosignerSignResponse, error) {
+	c.calls.Lock()
+	c.calls.signs++
+	c.calls.Unlock()
+	return c.Cosigner.SetNoncesAndSign(ctx, req)
+}
+
+func (c *countingCosigner) counts() (nonces, signs int) {
+	c.calls.Lock()
+	defer c.calls.Unlock()
+	return c.calls.nonces, c.calls.signs
+}
+
+// A passed-height extension retry must be refused by the leader before nonces
+// are drawn or any cosigner is contacted. Deciding it on the leader keeps the
+// refusal typed: a peer cosigner's identical refusal crosses the cluster RPC as
+// an untyped string, which the privval handler cannot classify and answers by
+// dropping the chain node connection — turning a terminal condition into a
+// futile retry loop.
+func TestThresholdValidatorVoteExtensionStaleHeightDecidedOnLeader(t *testing.T) {
+	cosigners, _ := getTestLocalCosigners(t, 2, 2)
+	peer := &countingCosigner{Cosigner: cosigners[1]}
+	leader := &MockLeader{id: 1}
+	validator := NewThresholdValidator(
+		cometlog.NewNopLogger(), cosigners[0].config, 2, time.Second, 1,
+		cosigners[0], []Cosigner{peer}, leader,
+	)
+	leader.leader = validator
+	t.Cleanup(validator.Stop)
+	require.NoError(t, validator.LoadSignStateIfNecessary(testChainID))
+	ctx := context.Background()
+
+	vote := voteWithExtension("first")
+	_, _, stamp, err := validator.Sign(ctx, testChainID, VoteToBlock(testChainID, &vote))
+	require.NoError(t, err)
+	vote.Timestamp = stamp
+
+	next := vote
+	next.Height++
+	_, _, _, err = validator.Sign(ctx, testChainID, VoteToBlock(testChainID, &next))
+	require.NoError(t, err)
+
+	noncesBefore, signsBefore := peer.counts()
+
+	// Same vote, changed extension, now a height behind the watermark.
+	retry := vote
+	retry.Extension = []byte("second")
+	_, _, _, err = validator.Sign(ctx, testChainID, VoteToBlock(testChainID, &retry))
+	var heightRegression *HeightRegressionError
+	require.ErrorAs(t, err, &heightRegression)
+
+	noncesAfter, signsAfter := peer.counts()
+	require.Equal(t, noncesBefore, noncesAfter,
+		"a stale extension retry must not draw nonces from a cosigner")
+	require.Equal(t, signsBefore, signsAfter,
+		"a stale extension retry must not reach a cosigner's signer")
+}
