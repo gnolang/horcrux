@@ -1,7 +1,8 @@
 name: Release
 
 # Publishes the gnolang/horcrux container image on a version tag. Builds
-# linux/amd64 from docker/horcrux/Dockerfile and pushes
+# linux/amd64 from docker/horcrux/Dockerfile, checks the image's contract with
+# docker/horcrux/check-image.sh, and only then pushes
 # ghcr.io/gnolang/horcrux:<tag>. The resulting manifest digest is recorded as
 # a job output, in the GitHub release notes, and in the job summary so a
 # deployment can pin <tag>@sha256:<digest>.
@@ -20,7 +21,7 @@ jobs:
   release:
     name: Build and publish the release image
     runs-on: ubuntu-latest
-    # A native Go build and one image push.
+    # A native Go build, a contract check, a cached rebuild and one image push.
     timeout-minutes: 20
     permissions:
       contents: write
@@ -36,6 +37,23 @@ jobs:
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+
+      - name: Build the release image for checking
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: docker/horcrux/Dockerfile
+          platforms: linux/amd64
+          load: true
+          push: false
+          provenance: false
+          tags: horcrux:check
+
+      - name: Check the image contract
+        # A failed check stops the release before anything reaches the
+        # registry. The push below rebuilds the same source and the builder
+        # reuses this build's cache.
+        run: docker/horcrux/check-image.sh horcrux:check
 
       - name: Log in to the GitHub Container Registry
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
