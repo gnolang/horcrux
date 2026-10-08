@@ -82,6 +82,29 @@ jobs:
         run: |
           echo "image=${IMAGE}:${TAG}@${DIGEST}" >> "$GITHUB_OUTPUT"
 
+      - name: Check that the published image has the checked layers
+        # The push above rebuilds the image instead of pushing the one checked.
+        # Comparing the layers' content hashes (diff_ids) proves the published
+        # files are the checked ones, independently of timestamps in the image
+        # config and of the daemon's image store. It runs before the digest
+        # reaches the release notes, so a mismatch is never published for
+        # pinning; the pushed tag is live by then, so a red run leaves a tag to
+        # delete or overwrite.
+        env:
+          PINNED_IMAGE: ${{ steps.image.outputs.image }}
+        run: |
+          checked="$(docker image inspect --format '{{json .RootFS.Layers}}' horcrux:check)"
+          published="$(docker buildx imagetools inspect "$PINNED_IMAGE" --format '{{json .Image.RootFS.DiffIDs}}')"
+          # imagetools indents its JSON and docker prints it on one line;
+          # normalize both after capturing them, so a failed command still
+          # fails the step.
+          checked="$(jq -c . <<<"$checked")"
+          published="$(jq -c . <<<"$published")"
+          echo "checked layers:   ${checked}"
+          echo "published layers: ${published}"
+          [ "$checked" != "null" ]
+          [ "$checked" = "$published" ]
+
       - name: Publish the digest to the GitHub release notes
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
