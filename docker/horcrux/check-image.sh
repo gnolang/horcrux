@@ -80,7 +80,7 @@ if ! out="$(exec docker export "$container" 2>&1 >"$archive")"; then
   exit 1
 fi
 if ! listing="$(tar -tf "$archive" 2>&1)"; then
-  echo "FAIL: cannot export the image's files:"$'\n'"$listing" >&2
+  echo "FAIL: cannot list the image's files:"$'\n'"$listing" >&2
   exit 1
 fi
 
@@ -89,9 +89,13 @@ if [[ "$contents" != "$expected" ]]; then
   fail "unexpected image contents:"$'\n'"$(diff <(echo "$expected") <(echo "$contents") || true)"
 fi
 
+if ! verbose="$(tar --numeric-owner -tvf "$archive" 2>&1)"; then
+  echo "FAIL: cannot list the image's files with their owners:"$'\n'"$verbose" >&2
+  exit 1
+fi
 # GNU tar prints the owner as "2345/2345"; bsdtar prints a link count, then
 # uid and gid as separate fields.
-owner="$(tar --numeric-owner -tvf "$archive" |
+owner="$(printf '%s\n' "$verbose" |
   awk '$NF == "home/horcrux/" { if ($2 ~ /\//) print $2; else print $3 "/" $4 }')"
 if [[ "$owner" != "2345/2345" ]]; then
   fail "home/horcrux/ is owned by '$owner', want '2345/2345'"
