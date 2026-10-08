@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Checks the contract of a horcrux release image: the binary runs, the image
 # holds no shell, it works under the hardened runtime the cosigners use, it
-# contains only the four files it is meant to ship, and it declares no
-# ENTRYPOINT.
+# runs as the horcrux user, it contains only the four files it is meant to
+# ship with the home owned by uid and gid 2345, and it declares no ENTRYPOINT.
 #
 # Usage: check-image.sh <image>
 set -euo pipefail
@@ -42,6 +42,11 @@ if [[ "$entrypoint" != "null" && "$entrypoint" != "[]" ]]; then
   fail "the image declares an ENTRYPOINT: $entrypoint"
 fi
 
+user="$(docker image inspect --format '{{.Config.User}}' "$image")"
+if [[ "$user" != "horcrux" ]]; then
+  fail "the image runs as user '$user', want 'horcrux'"
+fi
+
 # Exactly the files Docker injects into every container, which docker export
 # includes.
 injected='^(\.dockerenv|dev/(console|pts/|shm/)?|proc/|sys/|etc/(hostname|hosts|mtab|resolv\.conf))$'
@@ -79,6 +84,14 @@ fi
 contents="$(printf '%s\n' "$listing" | { grep -Ev "$injected" || true; } | LC_ALL=C sort)"
 if [[ "$contents" != "$expected" ]]; then
   fail "unexpected image contents:"$'\n'"$(diff <(echo "$expected") <(echo "$contents") || true)"
+fi
+
+# GNU tar prints the owner as "2345/2345"; bsdtar prints a link count, then
+# uid and gid as separate fields.
+owner="$(tar --numeric-owner -tvf "$archive" |
+  awk '$NF == "home/horcrux/" { if ($2 ~ /\//) print $2; else print $3 "/" $4 }')"
+if [[ "$owner" != "2345/2345" ]]; then
+  fail "home/horcrux/ is owned by '$owner', want '2345/2345'"
 fi
 
 exit "$failed"
