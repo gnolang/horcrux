@@ -72,7 +72,10 @@ cleanup() {
 trap cleanup EXIT
 
 container="$(docker create "$image" horcrux)"
-if ! out="$(docker export -o "$archive" "$container" 2>&1)"; then
+# exec runs docker in place of the command-substitution subshell; with that
+# subshell in between, a hangup can cut the cleanup trap short. Writing stdout
+# into the archive leaves no docker temp file behind when export is interrupted.
+if ! out="$(exec docker export "$container" 2>&1 >"$archive")"; then
   echo "FAIL: cannot export the image's files:"$'\n'"$out" >&2
   exit 1
 fi
