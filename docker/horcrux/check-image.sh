@@ -54,10 +54,29 @@ etc/ssl/cert.pem
 home/
 home/horcrux/"
 
+container=""
+archive="$(mktemp)"
+# shellcheck disable=SC2329 # invoked by the EXIT trap below
+cleanup() {
+  # A failed cleanup must not turn a passing check into a failing one.
+  if [[ -n "$container" ]]; then
+    docker rm -f "$container" >/dev/null || true
+  fi
+  rm -f "$archive"
+}
+trap cleanup EXIT
+
 container="$(docker create "$image" horcrux)"
-# A failed cleanup must not turn a passing check into a failing one.
-trap 'docker rm -f "$container" >/dev/null || true' EXIT
-contents="$(docker export "$container" | tar -tf - | { grep -Ev "$injected" || true; } | LC_ALL=C sort)"
+if ! out="$(docker export -o "$archive" "$container" 2>&1)"; then
+  echo "FAIL: cannot export the image's files:"$'\n'"$out" >&2
+  exit 1
+fi
+if ! listing="$(tar -tf "$archive" 2>&1)"; then
+  echo "FAIL: cannot export the image's files:"$'\n'"$listing" >&2
+  exit 1
+fi
+
+contents="$(printf '%s\n' "$listing" | { grep -Ev "$injected" || true; } | LC_ALL=C sort)"
 if [[ "$contents" != "$expected" ]]; then
   fail "unexpected image contents:"$'\n'"$(diff <(echo "$expected") <(echo "$contents") || true)"
 fi
