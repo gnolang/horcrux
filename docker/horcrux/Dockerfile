@@ -6,7 +6,8 @@
 # `docker buildx imagetools inspect golang:<tag>` and update the tag and digest
 # together, here and in docker/horcrux/native.Dockerfile — and keep it in step
 # with the GOTOOLCHAIN pin in .github/workflows/govulncheck.yml, which must scan
-# the same Go toolchain this image builds with.
+# the same Go toolchain this image builds with, and with the toolchain lines in
+# go.work and go.mod. .github/workflows/image.yml fails when any of them differ.
 FROM golang:1.27-alpine@sha256:738d1cf061836894ff6bb8c33881080ac66de8cf0586615012a0c8f592649cfa AS build-env
 
 RUN apk add --update --no-cache make git libc-dev bash gcc linux-headers eudev-dev
