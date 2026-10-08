@@ -1,4 +1,10 @@
-FROM golang:1.25-alpine AS build-env
+# Pinned by the multi-arch index digest so a rebuild of the same source always
+# compiles with the same toolchain image. To move the pin: read the new digest
+# with `docker buildx imagetools inspect golang:<tag>` and update the tag and
+# digest together — and keep it in step with the GOTOOLCHAIN pin in
+# .github/workflows/govulncheck.yml, which must scan the same toolchain this
+# image builds with.
+FROM golang:1.25-alpine@sha256:1ae0735f00daffa3aaf1363a5184c0d2dc55c78e3db4ec70241cdac97bf84b59 AS build-env
 
 RUN apk add --update --no-cache make git libc-dev bash gcc linux-headers eudev-dev
 
