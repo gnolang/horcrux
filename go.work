@@ -3,7 +3,7 @@ go 1.25.0
 // Minimum toolchain for workspace builds, the default for local and CI builds:
 // GOTOOLCHAIN=auto switches to it when the installed Go is older. Keep it equal
 // to the Go version docker/horcrux/Dockerfile pins.
-toolchain go1.27.1
+toolchain go1.27.2
 
 use (
 	.

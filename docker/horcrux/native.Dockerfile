@@ -1,6 +1,6 @@
 # Same golang image as docker/horcrux/Dockerfile, pinned by the same multi-arch
 # index digest; move the pins together as docker/horcrux/Dockerfile describes.
-FROM golang:1.27-alpine@sha256:8a5910f31396cd4d89662f56c68b3ae31d374308270a1c3bd96672ee5ed43414 AS build-env
+FROM golang:1.27-alpine@sha256:738d1cf061836894ff6bb8c33881080ac66de8cf0586615012a0c8f592649cfa AS build-env
 
 RUN apk add --update --no-cache curl make git libc-dev bash gcc linux-headers eudev-dev
 
