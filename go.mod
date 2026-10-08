@@ -6,7 +6,7 @@ go 1.25.0
 // follow go.work's toolchain line instead, and the release and e2e images build
 // with GOTOOLCHAIN=local and ignore both. Keep all of them equal to the Go
 // version docker/horcrux/Dockerfile pins.
-toolchain go1.27.1
+toolchain go1.27.2
 
 require (
 	github.com/Jille/raft-grpc-leader-rpc v1.1.0
