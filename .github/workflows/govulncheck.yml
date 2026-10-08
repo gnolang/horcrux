@@ -21,7 +21,7 @@ jobs:
         with:
           # Manifest-available base; the scan step below pins the toolchain it
           # runs under.
-          go-version: '1.25.x'
+          go-version: '1.27.x'
 
       - name: Run govulncheck
         # Pin the toolchain the scan runs under to the Go toolchain of the golang
@@ -30,5 +30,5 @@ jobs:
         # toolchain line does not govern that build: the image sets
         # GOTOOLCHAIN=local, which ignores it.
         env:
-          GOTOOLCHAIN: go1.25.14
+          GOTOOLCHAIN: go1.27.1
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...

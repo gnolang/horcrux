@@ -21,8 +21,8 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          # Manifest-available base; go.mod's toolchain directive upgrades it via GOTOOLCHAIN=auto.
-          go-version: '1.25.x'
+          # Manifest-available base; go.work's toolchain line upgrades it via GOTOOLCHAIN=auto.
+          go-version: '1.27.x'
 
       # checkout horcrux
       - name: checkout horcrux
@@ -52,8 +52,8 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          # Manifest-available base; go.mod's toolchain directive upgrades it via GOTOOLCHAIN=auto.
-          go-version: '1.25.x'
+          # Manifest-available base; go.work's toolchain line upgrades it via GOTOOLCHAIN=auto.
+          go-version: '1.27.x'
 
       # checkout horcrux
       - name: checkout horcrux
