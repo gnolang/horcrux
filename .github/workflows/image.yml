@@ -1,0 +1,66 @@
+name: Image
+
+# Builds the release image from docker/horcrux/Dockerfile on pull requests and
+# on pushes to main, the same way release.yml does but without pushing, checks
+# its contract with docker/horcrux/check-image.sh, and checks that the Go
+# toolchain pins agree. Pull requests check a change to the shipped image
+# before it reaches main; pushes to main check what a version tag would publish.
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  image:
+    name: Build and check the release image
+    runs-on: ubuntu-latest
+    # A native Go build and a handful of short container runs.
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+
+      - name: Build the release image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: docker/horcrux/Dockerfile
+          platforms: linux/amd64
+          load: true
+          push: false
+          provenance: false
+          tags: horcrux:check
+
+      - name: Check the image contract
+        run: docker/horcrux/check-image.sh horcrux:check
+
+      - name: Check that the Go toolchain pins agree
+        # The release and e2e Dockerfiles pin the same golang image, and
+        # govulncheck scans the Go toolchain that image ships. The pins are kept
+        # equal by hand; fail when they drift apart.
+        run: |
+          release="$(grep -oE 'golang:[^ ]+@sha256:[0-9a-f]{64}' docker/horcrux/Dockerfile)" ||
+            { echo "no digest-pinned golang image in docker/horcrux/Dockerfile" >&2; exit 1; }
+          native="$(grep -oE 'golang:[^ ]+@sha256:[0-9a-f]{64}' docker/horcrux/native.Dockerfile)" ||
+            { echo "no digest-pinned golang image in docker/horcrux/native.Dockerfile" >&2; exit 1; }
+          echo "the release image builds from ${release}; the e2e image from ${native}"
+          [ "$release" = "$native" ]
+          # horcrux version prints its JSON to stderr.
+          built="$(docker run --rm --entrypoint horcrux horcrux:check version 2>&1 |
+            grep -oE '"go_version": "go[0-9a-z.]+' | grep -oE 'go[0-9a-z.]+$')" ||
+            { echo "no go_version in the output of horcrux version" >&2; exit 1; }
+          scanned="$(grep -oE 'GOTOOLCHAIN: "?go[0-9a-z.]+' .github/workflows/govulncheck.yml |
+            grep -oE 'go[0-9a-z.]+$')" ||
+            { echo "no GOTOOLCHAIN pin in .github/workflows/govulncheck.yml" >&2; exit 1; }
+          echo "the image builds with ${built}; govulncheck scans with ${scanned}"
+          [ "$built" = "$scanned" ]
