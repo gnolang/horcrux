@@ -45,9 +45,10 @@ jobs:
         run: docker/horcrux/check-image.sh horcrux:check
 
       - name: Check that the Go toolchain pins agree
-        # The release and e2e Dockerfiles pin the same golang image, and
-        # govulncheck scans the Go toolchain that image ships. The pins are kept
-        # equal by hand; fail when they drift apart.
+        # The release and e2e Dockerfiles pin the same golang image, govulncheck
+        # scans the Go toolchain that image ships, and the toolchain lines in
+        # go.work and go.mod name that same version. The pins are kept equal by
+        # hand; fail when they drift apart.
         run: |
           release="$(grep -oE 'golang:[^ ]+@sha256:[0-9a-f]{64}' docker/horcrux/Dockerfile)" ||
             { echo "no digest-pinned golang image in docker/horcrux/Dockerfile" >&2; exit 1; }
@@ -62,5 +63,12 @@ jobs:
           scanned="$(grep -oE 'GOTOOLCHAIN: "?go[0-9a-z.]+' .github/workflows/govulncheck.yml |
             grep -oE 'go[0-9a-z.]+$')" ||
             { echo "no GOTOOLCHAIN pin in .github/workflows/govulncheck.yml" >&2; exit 1; }
-          echo "the image builds with ${built}; govulncheck scans with ${scanned}"
+          workfloor="$(grep -oE '^toolchain go[0-9a-z.]+' go.work | grep -oE 'go[0-9a-z.]+$')" ||
+            { echo "no toolchain line in go.work" >&2; exit 1; }
+          modfloor="$(grep -oE '^toolchain go[0-9a-z.]+' go.mod | grep -oE 'go[0-9a-z.]+$')" ||
+            { echo "no toolchain line in go.mod" >&2; exit 1; }
+          echo "the image builds with ${built}; govulncheck scans with ${scanned};" \
+            "go.work names ${workfloor}; go.mod names ${modfloor}"
           [ "$built" = "$scanned" ]
+          [ "$built" = "$workfloor" ]
+          [ "$built" = "$modfloor" ]
