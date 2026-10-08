@@ -41,7 +41,10 @@ COPY --from=build-env /go/bin/horcrux /bin/horcrux
 # Install trusted CA certificates
 COPY --from=build-env /etc/ssl/certs/ca-certificates.crt /etc/ssl/cert.pem
 
-# Install horcrux user
+# Install horcrux user. The passwd file is load-bearing twice: it resolves
+# USER horcrux, and the container runtime takes $HOME from its home field —
+# without it, config-dir resolution falls back to exec'ing getent/sh, which do
+# not exist in this image. Do not replace it with a bare numeric USER.
 COPY --from=busybox-min /etc/passwd /etc/passwd
 COPY --from=busybox-min --chown=2345:2345 /home/horcrux /home/horcrux
 
