@@ -14,7 +14,7 @@ Horcrux is a [multi-party-computation (MPC)](https://en.wikipedia.org/wiki/Secur
 >   flaw that risked key-material exposure, a residual double-sign path, an
 >   unauthenticated cluster admin surface, and several crash-inducing input paths.
 > - **Dependency & Go toolchain updates** — `govulncheck` reachable vulnerabilities
->   13 → 0; builds on Go 1.25.
+>   13 → 0; builds on Go 1.27.
 > - **Optional connection security** — persistent priv-validator connection
 >   authentication, and opt-in mutual TLS between cosigners.
 > - **Broader node compatibility** — opt-in leader-only priv-validator connections
